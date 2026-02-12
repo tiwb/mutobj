@@ -334,11 +334,12 @@ class Object(metaclass=ObjectMeta):
 
     def __init__(self, **kwargs: Any) -> None:
         """初始化对象，支持通过关键字参数设置属性"""
-        cls = type(self)
-        if cls in _attribute_registry:
-            for attr_name in _attribute_registry[cls]:
-                if attr_name in kwargs:
-                    setattr(self, attr_name, kwargs[attr_name])
+        # 遍历 MRO 中的所有类，收集所有属性
+        for klass in type(self).__mro__:
+            if klass in _attribute_registry:
+                for attr_name in _attribute_registry[klass]:
+                    if attr_name in kwargs:
+                        setattr(self, attr_name, kwargs[attr_name])
 
 
 # Extension 视图缓存
