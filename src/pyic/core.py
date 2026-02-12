@@ -32,6 +32,12 @@ _DECLARED_METHODS: str = "__pyic_declared_methods__"
 # 声明 property 标记
 _DECLARED_PROPERTIES: str = "__pyic_declared_properties__"
 
+# 声明 classmethod 标记
+_DECLARED_CLASSMETHODS: str = "__pyic_declared_classmethods__"
+
+# 声明 staticmethod 标记
+_DECLARED_STATICMETHODS: str = "__pyic_declared_staticmethods__"
+
 
 def _is_stub_method(func: Callable[..., Any]) -> bool:
     """检查方法是否为桩方法（只有 docstring + ... 或 pass）"""
@@ -94,6 +100,34 @@ def _make_stub_method(name: str, cls: type) -> Callable[..., Any]:
     # 存储对类的引用，便于 impl 装饰器查找
     stub.__pyic_class__ = cls
     return stub
+
+
+def _make_stub_classmethod(name: str, cls: type) -> classmethod:
+    """创建一个 classmethod 桩方法"""
+    def stub(cls_arg: type, *args: Any, **kwargs: Any) -> Any:
+        raise NotImplementedError(
+            f"Classmethod '{name}' is declared in {cls.__name__} but not implemented. "
+            f"Use @pyic.impl({cls.__name__}.{name}) to provide implementation."
+        )
+    stub.__name__ = name
+    stub.__qualname__ = f"{cls.__name__}.{name}"
+    stub.__pyic_class__ = cls
+    stub.__pyic_is_classmethod__ = True
+    return classmethod(stub)
+
+
+def _make_stub_staticmethod(name: str, cls: type) -> staticmethod:
+    """创建一个 staticmethod 桩方法"""
+    def stub(*args: Any, **kwargs: Any) -> Any:
+        raise NotImplementedError(
+            f"Staticmethod '{name}' is declared in {cls.__name__} but not implemented. "
+            f"Use @pyic.impl({cls.__name__}.{name}) to provide implementation."
+        )
+    stub.__name__ = name
+    stub.__qualname__ = f"{cls.__name__}.{name}"
+    stub.__pyic_class__ = cls
+    stub.__pyic_is_staticmethod__ = True
+    return staticmethod(stub)
 
 
 class PyicAttributeDescriptor:
@@ -191,6 +225,10 @@ class ObjectMeta(type):
         declared_methods: set[str] = set()
         # 识别声明的 property
         declared_properties: set[str] = set()
+        # 识别声明的 classmethod
+        declared_classmethods: set[str] = set()
+        # 识别声明的 staticmethod
+        declared_staticmethods: set[str] = set()
 
         # 创建类
         cls = super().__new__(mcs, name, bases, namespace)
@@ -236,7 +274,37 @@ class ObjectMeta(type):
         _property_registry[cls] = prop_registry
         setattr(cls, _DECLARED_PROPERTIES, declared_properties)
 
-        # 处理方法声明
+        # 处理 classmethod 声明
+        for method_name, method_value in namespace.items():
+            if method_name.startswith("_"):
+                continue
+            if isinstance(method_value, classmethod):
+                # 获取底层函数
+                func = method_value.__func__
+                if _is_stub_method(func):
+                    declared_classmethods.add(method_name)
+                    # 替换为桩 classmethod
+                    stub = _make_stub_classmethod(method_name, cls)
+                    setattr(cls, method_name, stub)
+
+        setattr(cls, _DECLARED_CLASSMETHODS, declared_classmethods)
+
+        # 处理 staticmethod 声明
+        for method_name, method_value in namespace.items():
+            if method_name.startswith("_"):
+                continue
+            if isinstance(method_value, staticmethod):
+                # 获取底层函数
+                func = method_value.__func__
+                if _is_stub_method(func):
+                    declared_staticmethods.add(method_name)
+                    # 替换为桩 staticmethod
+                    stub = _make_stub_staticmethod(method_name, cls)
+                    setattr(cls, method_name, stub)
+
+        setattr(cls, _DECLARED_STATICMETHODS, declared_staticmethods)
+
+        # 处理普通方法声明
         for method_name, method_value in namespace.items():
             if method_name.startswith("_"):
                 continue
@@ -435,9 +503,19 @@ def impl(
         if target_cls is None:
             raise ValueError(f"Cannot find class for method {method_name}")
 
-        # 检查是否为声明的方法
-        declared = getattr(target_cls, _DECLARED_METHODS, set())
-        if method_name not in declared:
+        # 检查是否为 classmethod 声明
+        declared_classmethods = getattr(target_cls, _DECLARED_CLASSMETHODS, set())
+        is_classmethod = method_name in declared_classmethods
+
+        # 检查是否为 staticmethod 声明
+        declared_staticmethods = getattr(target_cls, _DECLARED_STATICMETHODS, set())
+        is_staticmethod = method_name in declared_staticmethods
+
+        # 检查是否为普通方法声明
+        declared_methods = getattr(target_cls, _DECLARED_METHODS, set())
+        is_method = method_name in declared_methods
+
+        if not (is_method or is_classmethod or is_staticmethod):
             raise ValueError(
                 f"Method '{method_name}' is not declared in {target_cls.__name__}"
             )
@@ -460,8 +538,13 @@ def impl(
         func.__name__ = method_name
         func.__qualname__ = f"{target_cls.__name__}.{method_name}"
 
-        # 替换类上的方法
-        setattr(target_cls, method_name, func)
+        # 替换类上的方法（根据类型包装）
+        if is_classmethod:
+            setattr(target_cls, method_name, classmethod(func))
+        elif is_staticmethod:
+            setattr(target_cls, method_name, staticmethod(func))
+        else:
+            setattr(target_cls, method_name, func)
 
         return func
 
