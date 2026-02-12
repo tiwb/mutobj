@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "pyic"
-version = "0.1.0"
+version = "0.2.0"
 description = "Python Interface Class - 支持声明与实现分离的类定义库"
 readme = "README.md"
 license = {text = "MIT"}
@@ -12,18 +12,26 @@ requires-python = ">=3.11"
 authors = [
     {name = "pyic contributors"}
 ]
-keywords = ["interface", "class", "separation", "declaration", "implementation"]
+keywords = ["interface", "class", "separation", "declaration", "implementation", "extension"]
 classifiers = [
-    "Development Status :: 3 - Alpha",
+    "Development Status :: 4 - Beta",
     "Intended Audience :: Developers",
     "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
     "Programming Language :: Python :: 3",
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
     "Programming Language :: Python :: 3.13",
     "Programming Language :: Python :: 3.14",
+    "Topic :: Software Development :: Libraries :: Python Modules",
     "Typing :: Typed",
 ]
+
+[project.urls]
+Homepage = "https://github.com/pyic/pyic"
+Documentation = "https://github.com/pyic/pyic#readme"
+Repository = "https://github.com/pyic/pyic"
+Issues = "https://github.com/pyic/pyic/issues"
 
 [project.optional-dependencies]
 dev = [
@@ -35,6 +43,9 @@ dev = [
 
 [tool.setuptools.packages.find]
 where = ["src"]
+
+[tool.setuptools.package-data]
+pyic = ["py.typed"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

@@ -6,5 +6,5 @@ pyic - Python Interface Class
 
 from pyic.core import Object, Extension, impl
 
-__version__ = "0.1.0"
+__version__ = "0.2.0"
 __all__ = ["Object", "Extension", "impl"]

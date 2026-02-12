@@ -14,4 +14,4 @@ def test_import_pyic():
 def test_version():
     """测试版本号"""
     import pyic
-    assert pyic.__version__ == "0.1.0"
+    assert pyic.__version__ == "0.2.0"

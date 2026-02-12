@@ -1,6 +1,6 @@
 # Python 分离式类定义库 设计规范
 
-**状态**：✅ v0.2.0 功能实施完成
+**状态**：✅ v0.2.0 实施完成
 **日期**：2026-02-12
 **类型**：功能设计
 
@@ -251,11 +251,21 @@ class User(pyic.Object):
   - [x] 单元测试 (9个测试通过)
   - 状态：✅ 已完成
 
-### 阶段四：文档与发布 [待开始]
+### 阶段四：文档与发布 [✅ 已完成]
 
-- [ ] **Task 4.1**: API 文档
-- [ ] **Task 4.2**: 使用指南
-- [ ] **Task 4.3**: PyPI 发布准备
+- [x] **Task 4.1**: API 文档
+  - [x] 创建 doc/api/reference.md
+  - 状态：✅ 已完成
+- [x] **Task 4.2**: 使用指南
+  - [x] 创建 doc/guide.md
+  - 状态：✅ 已完成
+- [x] **Task 4.3**: PyPI 发布准备
+  - [x] 更新 README.md
+  - [x] 添加 LICENSE (MIT)
+  - [x] 添加 py.typed 标记
+  - [x] 完善 pyproject.toml
+  - [x] 构建 wheel 和 sdist
+  - 状态：✅ 已完成
 
 ---
 
@@ -264,10 +274,11 @@ class User(pyic.Object):
 - ✅ **阶段一：核心框架** - 100% 完成 (3/3任务)
 - ✅ **阶段二：Extension 机制** - 100% 完成 (3/3任务)
 - ✅ **阶段三：Property 与高级特性** - 100% 完成 (3/3任务)
-- ⏸️ **阶段四：文档与发布** - 0% 完成 (0/3任务)
+- ✅ **阶段四：文档与发布** - 100% 完成 (3/3任务)
 
-**v0.2.0 功能完成度：100%** (9/9任务)
+**所有任务完成度：100%** (12/12任务)
 **单元测试覆盖：50个测试全部通过**
+**构建产物：pyic-0.2.0.tar.gz, pyic-0.2.0-py3-none-any.whl**
 
 ---
 
@@ -301,10 +312,18 @@ class User(pyic.Object):
 
 ---
 
-**设计状态**：✅ v0.2.0 功能实施完成
+**设计状态**：✅ 实施完成
 
 **完成情况**：
-- 核心框架 + Extension + Property + classmethod/staticmethod + 继承 全部完成
-- 50个单元测试全部通过
+- 所有 12 个任务全部完成
+- 50 个单元测试全部通过
+- 包已构建：pyic-0.2.0.tar.gz, pyic-0.2.0-py3-none-any.whl
 
-**下一步**：开始阶段四（文档与发布），或确认完成进行归档
+**发布命令**：
+```bash
+# 上传到 TestPyPI
+twine upload --repository testpypi dist/*
+
+# 上传到 PyPI
+twine upload dist/*
+```
