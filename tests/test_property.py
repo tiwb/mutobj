@@ -22,8 +22,8 @@ class TestPropertyDeclaration:
         declared = getattr(User, _DECLARED_PROPERTIES, set())
         assert "display_name" in declared
 
-    def test_unimplemented_property_raises(self):
-        """测试访问未实现的 property 抛出 NotImplementedError"""
+    def test_default_property_getter_runs(self):
+        """测试默认 property getter（方法体为 ...）直接执行"""
         class Config(mutobj.Declaration):
             @property
             def value(self) -> int:
@@ -31,11 +31,9 @@ class TestPropertyDeclaration:
                 ...
 
         c = Config()
-        with pytest.raises(NotImplementedError) as exc_info:
-            _ = c.value
-
-        assert "value" in str(exc_info.value)
-        assert "getter is not implemented" in str(exc_info.value)
+        # 默认 getter 执行方法体（... 是表达式，函数隐式返回 None）
+        result = c.value
+        assert result is None
 
 
 class TestPropertyImplementation:
@@ -132,26 +130,28 @@ class TestPropertyOverride:
         f = Formatter(value="test")
         assert f.formatted == "[test]"
 
-        @mutobj.impl(Formatter.formatted.getter, override=True)
+        @mutobj.impl(Formatter.formatted.getter)
         def formatted_v2(self: Formatter) -> str:
             return f"<{self.value}>"
 
         assert f.formatted == "<test>"
 
-    def test_duplicate_property_getter_raises(self):
-        """测试重复实现 property getter 抛出错误"""
+    def test_different_module_property_getter_overrides(self):
+        """测试不同模块 property getter 自动覆盖"""
         class Wrapper(mutobj.Declaration):
             @property
             def wrapped(self) -> str:
                 ...
 
-        @mutobj.impl(Wrapper.wrapped.getter)
         def wrapped_v1(self: Wrapper) -> str:
             return "v1"
+        wrapped_v1.__module__ = "prop_dup_mod_a"
+        mutobj.impl(Wrapper.wrapped.getter)(wrapped_v1)
 
-        with pytest.raises(ValueError) as exc_info:
-            @mutobj.impl(Wrapper.wrapped.getter)
-            def wrapped_v2(self: Wrapper) -> str:
-                return "v2"
+        def wrapped_v2(self: Wrapper) -> str:
+            return "v2"
+        wrapped_v2.__module__ = "prop_dup_mod_b"
+        mutobj.impl(Wrapper.wrapped.getter)(wrapped_v2)
 
-        assert "already implemented" in str(exc_info.value)
+        w = Wrapper()
+        assert w.wrapped == "v2"  # v2 为活跃实现

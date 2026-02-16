@@ -2,7 +2,7 @@
 
 import pytest
 import mutobj
-from mutobj.core import _method_registry
+from mutobj.core import _impl_chain
 
 
 class TestImplDecorator:
@@ -24,8 +24,8 @@ class TestImplDecorator:
         g = Greeter(name="World")
         assert g.greet() == "Hello, World!"
 
-    def test_implementation_registered(self):
-        """测试实现被注册"""
+    def test_implementation_registered_in_chain(self):
+        """测试实现被注册到覆盖链"""
         class Counter(mutobj.Declaration):
             def count(self) -> int:
                 ...
@@ -34,28 +34,54 @@ class TestImplDecorator:
         def count(self: Counter) -> int:
             return 42
 
-        assert Counter in _method_registry
-        assert "count" in _method_registry[Counter]
+        key = (Counter, "count")
+        assert key in _impl_chain
+        chain = _impl_chain[key]
+        # 链中应有默认实现和外部实现
+        assert len(chain) >= 2
+        # 链顶应为外部实现
+        assert chain[-1][0] is count
 
-    def test_duplicate_implementation_raises(self):
-        """测试重复实现抛出错误"""
+    def test_different_module_impl_overrides(self):
+        """测试不同模块实现自动覆盖（后注册者成为活跃实现）"""
         class Adder(mutobj.Declaration):
             def add(self, a: int, b: int) -> int:
                 ...
 
-        @mutobj.impl(Adder.add)
         def add_v1(self: Adder, a: int, b: int) -> int:
             return a + b
+        add_v1.__module__ = "dup_check_mod_a"
+        mutobj.impl(Adder.add)(add_v1)
 
-        with pytest.raises(ValueError) as exc_info:
-            @mutobj.impl(Adder.add)
-            def add_v2(self: Adder, a: int, b: int) -> int:
-                return a + b + 1
+        def add_v2(self: Adder, a: int, b: int) -> int:
+            return a + b + 1
+        add_v2.__module__ = "dup_check_mod_b"
+        mutobj.impl(Adder.add)(add_v2)
 
-        assert "already implemented" in str(exc_info.value)
+        a = Adder()
+        assert a.add(1, 2) == 4  # v2 为活跃实现
+
+    def test_same_module_reimpl_replaces(self):
+        """测试同模块重复实现自动替换（reload 语义）"""
+        class Replacer(mutobj.Declaration):
+            def work(self) -> str:
+                ...
+
+        @mutobj.impl(Replacer.work)
+        def work_v1(self: Replacer) -> str:
+            return "v1"
+
+        r = Replacer()
+        assert r.work() == "v1"
+
+        @mutobj.impl(Replacer.work)
+        def work_v2(self: Replacer) -> str:
+            return "v2"
+
+        assert r.work() == "v2"
 
     def test_override_implementation(self):
-        """测试使用 override=True 覆盖实现"""
+        """测试覆盖实现（不同模块后注册者覆盖）"""
         class Multiplier(mutobj.Declaration):
             def multiply(self, a: int, b: int) -> int:
                 ...
@@ -67,9 +93,10 @@ class TestImplDecorator:
         m = Multiplier()
         assert m.multiply(3, 4) == 12
 
-        @mutobj.impl(Multiplier.multiply, override=True)
         def multiply_v2(self: Multiplier, a: int, b: int) -> int:
             return a * b * 2
+        multiply_v2.__module__ = "override_test_mod"
+        mutobj.impl(Multiplier.multiply)(multiply_v2)
 
         assert m.multiply(3, 4) == 24
 
@@ -102,6 +129,3 @@ class TestImplErrors:
         @mutobj.impl(Widget.declared_method)
         def declared_impl(self: Widget) -> None:
             pass
-
-        # 注意：由于方法需要先存在于类中，
-        # 这个测试需要特殊处理

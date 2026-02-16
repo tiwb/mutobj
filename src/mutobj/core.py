@@ -6,9 +6,6 @@ mutobj 核心模块
 
 from __future__ import annotations
 
-import ast
-import inspect
-import textwrap
 import weakref
 from typing import TypeVar, Generic, Callable, Any, get_type_hints, TYPE_CHECKING
 
@@ -17,8 +14,15 @@ __all__ = ["Declaration", "Extension", "impl", "unregister_module_impls"]
 # 类型变量
 T = TypeVar("T", bound="Declaration")
 
-# 全局方法注册表: {类: {方法名: 实现函数}}
-_method_registry: dict[type, dict[str, Callable[..., Any]]] = {}
+# 实现覆盖链：{(类, 方法名或属性访问器): [(实现函数, 来源模块, 注册序号), ...]}
+# 按注册序号排序，列表尾部（最高序号）= 当前活跃实现
+_impl_chain: dict[tuple[type, str], list[tuple[Callable[..., Any], str, int]]] = {}
+
+# 全局注册序号计数器
+_impl_seq: int = 0
+
+# 模块首次注册序号（reload 时复用，保持链中位置不变）
+_module_first_seq: dict[tuple[type, str, str], int] = {}  # (cls, key, module) -> seq
 
 # 全局属性注册表: {类: {属性名: 类型注解}}
 _attribute_registry: dict[type, dict[str, Any]] = {}
@@ -26,13 +30,10 @@ _attribute_registry: dict[type, dict[str, Any]] = {}
 # 全局 property 注册表: {类: {property名: Property}}
 _property_registry: dict[type, dict[str, "Property"]] = {}
 
-# 全局 impl 来源注册表: {(类, 方法名): 模块名}
-_impl_sources: dict[tuple[type, str], str] = {}
-
 # 全局类注册表: {(模块名, qualname): 类}，用于 reload 时的 in-place 更新
 _class_registry: dict[tuple[str, str], type] = {}
 
-# 声明方法标记（用于标识未实现的方法）
+# 声明方法标记
 _DECLARED_METHODS: str = "__mutobj_declared_methods__"
 
 # 声明 property 标记
@@ -45,57 +46,8 @@ _DECLARED_CLASSMETHODS: str = "__mutobj_declared_classmethods__"
 _DECLARED_STATICMETHODS: str = "__mutobj_declared_staticmethods__"
 
 
-def _is_stub_method(func: Callable[..., Any]) -> bool:
-    """检查方法是否为桩方法（只有 docstring + ... 或 pass）"""
-    try:
-        source = inspect.getsource(func)
-        # 移除缩进
-        source = textwrap.dedent(source)
-        # 解析AST
-        tree = ast.parse(source)
-        if not tree.body:
-            return False
-
-        # 获取函数定义
-        func_def = tree.body[0]
-        if not isinstance(func_def, (ast.FunctionDef, ast.AsyncFunctionDef)):
-            return False
-
-        body = func_def.body
-        if not body:
-            return True
-
-        # 跳过 docstring
-        start_idx = 0
-        if (isinstance(body[0], ast.Expr) and
-            isinstance(body[0].value, ast.Constant) and
-            isinstance(body[0].value.value, str)):
-            start_idx = 1
-
-        remaining = body[start_idx:]
-
-        # 检查剩余语句
-        if not remaining:
-            return True
-
-        if len(remaining) == 1:
-            stmt = remaining[0]
-            # ... (Ellipsis)
-            if isinstance(stmt, ast.Expr) and isinstance(stmt.value, ast.Constant):
-                if stmt.value.value is ...:
-                    return True
-            # pass
-            if isinstance(stmt, ast.Pass):
-                return True
-
-        return False
-    except (OSError, TypeError):
-        # 无法获取源码（内置方法等）
-        return False
-
-
 def _make_stub_method(name: str, cls: type) -> Callable[..., Any]:
-    """创建一个桩方法，调用时抛出 NotImplementedError"""
+    """创建一个桩方法，调用时抛出 NotImplementedError（覆盖链为空的异常回退）"""
     def stub(self: Any, *args: Any, **kwargs: Any) -> Any:
         raise NotImplementedError(
             f"Method '{name}' is declared in {cls.__name__} but not implemented. "
@@ -103,13 +55,12 @@ def _make_stub_method(name: str, cls: type) -> Callable[..., Any]:
         )
     stub.__name__ = name
     stub.__qualname__ = f"{cls.__name__}.{name}"
-    # 存储对类的引用，便于 impl 装饰器查找
     stub.__mutobj_class__ = cls
     return stub
 
 
 def _make_stub_classmethod(name: str, cls: type) -> classmethod:
-    """创建一个 classmethod 桩方法"""
+    """创建一个 classmethod 桩方法（覆盖链为空的异常回退）"""
     def stub(cls_arg: type, *args: Any, **kwargs: Any) -> Any:
         raise NotImplementedError(
             f"Classmethod '{name}' is declared in {cls.__name__} but not implemented. "
@@ -123,7 +74,7 @@ def _make_stub_classmethod(name: str, cls: type) -> classmethod:
 
 
 def _make_stub_staticmethod(name: str, cls: type) -> staticmethod:
-    """创建一个 staticmethod 桩方法"""
+    """创建一个 staticmethod 桩方法（覆盖链为空的异常回退）"""
     def stub(*args: Any, **kwargs: Any) -> Any:
         raise NotImplementedError(
             f"Staticmethod '{name}' is declared in {cls.__name__} but not implemented. "
@@ -134,6 +85,92 @@ def _make_stub_staticmethod(name: str, cls: type) -> staticmethod:
     stub.__mutobj_class__ = cls
     stub.__mutobj_is_staticmethod__ = True
     return staticmethod(stub)
+
+
+def _apply_impl(cls: type, impl_key: str, func: Callable[..., Any]) -> None:
+    """将实现应用到类上"""
+    if impl_key.endswith(".getter"):
+        prop_name = impl_key[:-7]
+        prop = _property_registry.get(cls, {}).get(prop_name)
+        if prop is not None:
+            prop._fget = func
+    elif impl_key.endswith(".setter"):
+        prop_name = impl_key[:-7]
+        prop = _property_registry.get(cls, {}).get(prop_name)
+        if prop is not None:
+            prop._fset = func
+    else:
+        declared_cm = getattr(cls, _DECLARED_CLASSMETHODS, set())
+        declared_sm = getattr(cls, _DECLARED_STATICMETHODS, set())
+        if impl_key in declared_cm:
+            setattr(cls, impl_key, classmethod(func))
+        elif impl_key in declared_sm:
+            setattr(cls, impl_key, staticmethod(func))
+        else:
+            setattr(cls, impl_key, func)
+
+
+def _restore_stub(cls: type, impl_key: str) -> None:
+    """恢复桩方法（覆盖链异常为空时使用）"""
+    if impl_key.endswith(".getter"):
+        prop_name = impl_key[:-7]
+        prop = _property_registry.get(cls, {}).get(prop_name)
+        if prop is not None:
+            prop._fget = None
+    elif impl_key.endswith(".setter"):
+        prop_name = impl_key[:-7]
+        prop = _property_registry.get(cls, {}).get(prop_name)
+        if prop is not None:
+            prop._fset = None
+    else:
+        declared_cm = getattr(cls, _DECLARED_CLASSMETHODS, set())
+        declared_sm = getattr(cls, _DECLARED_STATICMETHODS, set())
+        if impl_key in declared_cm:
+            setattr(cls, impl_key, _make_stub_classmethod(impl_key, cls))
+        elif impl_key in declared_sm:
+            setattr(cls, impl_key, _make_stub_staticmethod(impl_key, cls))
+        else:
+            setattr(cls, impl_key, _make_stub_method(impl_key, cls))
+
+
+def _register_to_chain(
+    target_cls: type,
+    impl_key: str,
+    func: Callable[..., Any],
+    source_module: str,
+) -> bool:
+    """注册实现到覆盖链
+
+    Returns:
+        是否成为链顶（活跃实现）
+    """
+    global _impl_seq
+
+    key = (target_cls, impl_key)
+    chain = _impl_chain.setdefault(key, [])
+    seq_key = (target_cls, impl_key, source_module)
+
+    # 1. 检查同模块已有注册（importlib.reload 直接重新执行，未卸载）
+    existing_idx = next(
+        (i for i, (_, m, _) in enumerate(chain) if m == source_module), None
+    )
+    if existing_idx is not None:
+        old_seq = chain[existing_idx][2]
+        chain[existing_idx] = (func, source_module, old_seq)
+        return existing_idx == len(chain) - 1
+
+    # 2. 检查卸载后重新注册（unregister + reimport）
+    if seq_key in _module_first_seq:
+        seq = _module_first_seq[seq_key]
+    else:
+        # 3. 全新注册
+        _impl_seq += 1
+        seq = _impl_seq
+        _module_first_seq[seq_key] = seq
+
+    chain.append((func, source_module, seq))
+    chain.sort(key=lambda x: x[2])
+    return chain[-1][1] == source_module
 
 
 class AttributeDescriptor:
@@ -269,28 +306,44 @@ def _update_class_inplace(existing: type, new_cls: type) -> None:
 def _migrate_registries(existing: type, new_cls: type) -> None:
     """Move mutobj registry entries from new_cls to existing.
 
-    For method registry: merge (preserving existing impls that new_cls didn't add).
-    Then re-apply all registered impls onto the class to overwrite any stubs
-    that _update_class_inplace transplanted from new_cls.
+    合并 _impl_chain：将新默认实现替换到已有链中，保留外部 @impl 条目。
     """
-    # Merge method registries (existing impls survive if not overridden by new_cls)
-    if new_cls in _method_registry:
-        new_methods = _method_registry.pop(new_cls)
-        if existing not in _method_registry:
-            _method_registry[existing] = {}
-        _method_registry[existing].update(new_methods)
+    # 合并 _impl_chain
+    for key in list(_impl_chain):
+        cls, impl_key = key
+        if cls is not new_cls:
+            continue
 
-    # Re-apply all registered impls back onto the class
-    # (stubs from new_cls may have overwritten them during _update_class_inplace)
-    declared_cm = getattr(existing, _DECLARED_CLASSMETHODS, set())
-    declared_sm = getattr(existing, _DECLARED_STATICMETHODS, set())
-    for method_name, impl_func in _method_registry.get(existing, {}).items():
-        if method_name in declared_cm:
-            setattr(existing, method_name, classmethod(impl_func))
-        elif method_name in declared_sm:
-            setattr(existing, method_name, staticmethod(impl_func))
+        new_chain = _impl_chain.pop(key)
+        existing_key = (existing, impl_key)
+        existing_chain = _impl_chain.get(existing_key, [])
+
+        # 从新链中提取新的默认实现
+        new_default = next(
+            ((f, m, s) for f, m, s in new_chain if m == "__default__"), None
+        )
+
+        if existing_chain:
+            # 替换已有链中的默认实现条目
+            for i, (f, m, s) in enumerate(existing_chain):
+                if m == "__default__":
+                    if new_default is not None:
+                        existing_chain[i] = new_default
+                    break
         else:
-            setattr(existing, method_name, impl_func)
+            # 无已有链，直接使用新链
+            existing_chain = new_chain
+
+        _impl_chain[existing_key] = existing_chain
+
+        # 重新应用链顶实现到类上
+        if existing_chain:
+            _apply_impl(existing, impl_key, existing_chain[-1][0])
+
+    # 迁移 _module_first_seq 条目
+    keys_to_migrate = [k for k in _module_first_seq if k[0] is new_cls]
+    for k in keys_to_migrate:
+        _module_first_seq[(existing, k[1], k[2])] = _module_first_seq.pop(k)
 
     # Attribute registry: replace (new definition is authoritative)
     if new_cls in _attribute_registry:
@@ -302,14 +355,6 @@ def _migrate_registries(existing: type, new_cls: type) -> None:
         for prop in props.values():
             prop.owner_cls = existing
         _property_registry[existing] = props
-
-    # Migrate _impl_sources entries from new_cls to existing
-    keys_to_migrate = [
-        (cls, key) for (cls, key) in _impl_sources
-        if cls is new_cls
-    ]
-    for cls, key in keys_to_migrate:
-        _impl_sources[(existing, key)] = _impl_sources.pop((cls, key))
 
 
 class DeclarationMeta(type):
@@ -329,35 +374,29 @@ class DeclarationMeta(type):
         # 查找已存在的类（reload 场景）
         existing = _class_registry.get(key)
 
-        # 识别声明的方法（桩方法）
+        # 识别声明的方法
         declared_methods: set[str] = set()
-        # 识别声明的 property
         declared_properties: set[str] = set()
-        # 识别声明的 classmethod
         declared_classmethods: set[str] = set()
-        # 识别声明的 staticmethod
         declared_staticmethods: set[str] = set()
 
-        # 创建类（DeclarationMeta 需要处理 stubs、属性描述符、注册表等）
+        # 创建类
         cls = super().__new__(mcs, name, bases, namespace)
 
         # 跳过 Declaration 基类本身
         if name == "Declaration" and not bases:
             return cls
 
-        # 获取类型注解（Python 3.14+ 使用 PEP 649 延迟注解）
+        # 获取类型注解
         annotations = getattr(cls, "__annotations__", {})
 
         # 处理属性声明
         attr_registry: dict[str, Any] = {}
         for attr_name, attr_type in annotations.items():
-            # 跳过已经有值的类属性（如 classmethod 等）
             if attr_name in namespace and not isinstance(namespace[attr_name], AttributeDescriptor):
-                # 检查是否为方法或 property
                 if callable(namespace[attr_name]) or isinstance(namespace[attr_name], property):
                     continue
 
-            # 为属性创建描述符
             if not hasattr(cls, attr_name) or not isinstance(getattr(cls, attr_name), AttributeDescriptor):
                 descriptor = AttributeDescriptor(attr_name, attr_type)
                 setattr(cls, attr_name, descriptor)
@@ -365,70 +404,72 @@ class DeclarationMeta(type):
 
         _attribute_registry[cls] = attr_registry
 
-        # 处理 property 声明
+        # 处理 property 声明（所有 @property 转为 mutobj.Property，保存原始函数为默认实现）
         prop_registry: dict[str, Property] = {}
         for prop_name, prop_value in namespace.items():
             if prop_name.startswith("_"):
                 continue
             if isinstance(prop_value, property):
-                # 检查是否为桩 property（getter 是桩方法）
-                if prop_value.fget is not None and _is_stub_method(prop_value.fget):
-                    declared_properties.add(prop_name)
-                    # 创建 Property 替换原 property
-                    mutobj_prop = Property(prop_name, cls)
-                    setattr(cls, prop_name, mutobj_prop)
-                    prop_registry[prop_name] = mutobj_prop
+                declared_properties.add(prop_name)
+                mutobj_prop = Property(prop_name, cls)
+                setattr(cls, prop_name, mutobj_prop)
+                prop_registry[prop_name] = mutobj_prop
+                # 保存原始 getter 作为默认实现
+                if prop_value.fget is not None:
+                    _impl_chain.setdefault((cls, f"{prop_name}.getter"), []).append(
+                        (prop_value.fget, "__default__", 0)
+                    )
+                    mutobj_prop._fget = prop_value.fget
+                # 保存原始 setter 作为默认实现
+                if prop_value.fset is not None:
+                    _impl_chain.setdefault((cls, f"{prop_name}.setter"), []).append(
+                        (prop_value.fset, "__default__", 0)
+                    )
+                    mutobj_prop._fset = prop_value.fset
 
         _property_registry[cls] = prop_registry
         setattr(cls, _DECLARED_PROPERTIES, declared_properties)
 
-        # 处理 classmethod 声明
+        # 处理 classmethod 声明（保存原始函数为默认实现）
         for method_name, method_value in namespace.items():
             if method_name.startswith("_"):
                 continue
             if isinstance(method_value, classmethod):
-                # 获取底层函数
                 func = method_value.__func__
-                if _is_stub_method(func):
-                    declared_classmethods.add(method_name)
-                    # 替换为桩 classmethod
-                    stub = _make_stub_classmethod(method_name, cls)
-                    setattr(cls, method_name, stub)
+                declared_classmethods.add(method_name)
+                _impl_chain.setdefault((cls, method_name), []).append(
+                    (func, "__default__", 0)
+                )
+                func.__mutobj_class__ = cls
 
         setattr(cls, _DECLARED_CLASSMETHODS, declared_classmethods)
 
-        # 处理 staticmethod 声明
+        # 处理 staticmethod 声明（保存原始函数为默认实现）
         for method_name, method_value in namespace.items():
             if method_name.startswith("_"):
                 continue
             if isinstance(method_value, staticmethod):
-                # 获取底层函数
                 func = method_value.__func__
-                if _is_stub_method(func):
-                    declared_staticmethods.add(method_name)
-                    # 替换为桩 staticmethod
-                    stub = _make_stub_staticmethod(method_name, cls)
-                    setattr(cls, method_name, stub)
+                declared_staticmethods.add(method_name)
+                _impl_chain.setdefault((cls, method_name), []).append(
+                    (func, "__default__", 0)
+                )
+                func.__mutobj_class__ = cls
 
         setattr(cls, _DECLARED_STATICMETHODS, declared_staticmethods)
 
-        # 处理普通方法声明
+        # 处理普通方法声明（保存原始函数为默认实现，不替换为 stub）
         for method_name, method_value in namespace.items():
             if method_name.startswith("_"):
                 continue
             if callable(method_value) and not isinstance(method_value, (classmethod, staticmethod, property)):
-                if _is_stub_method(method_value):
-                    declared_methods.add(method_name)
-                    # 替换为桩方法
-                    stub = _make_stub_method(method_name, cls)
-                    setattr(cls, method_name, stub)
+                declared_methods.add(method_name)
+                _impl_chain.setdefault((cls, method_name), []).append(
+                    (method_value, "__default__", 0)
+                )
+                method_value.__mutobj_class__ = cls
 
-        # 存储声明的方法列表
         setattr(cls, _DECLARED_METHODS, declared_methods)
-
-        # 初始化方法注册表
-        if cls not in _method_registry:
-            _method_registry[cls] = {}
 
         # Reload: 如果已存在同 (module, qualname) 的类，就地更新
         if existing is not None and existing is not cls:
@@ -544,15 +585,12 @@ class Extension(Generic[T], metaclass=ExtensionMeta):
 
 def impl(
     method: Callable[..., Any] | _PropertyGetterPlaceholder | _PropertySetterPlaceholder,
-    *,
-    override: bool = False
 ) -> Callable[[Callable[..., Any]], Callable[..., Any]]:
     """
     方法实现装饰器
 
     Args:
         method: 要实现的方法（来自 Declaration 子类）
-        override: 是否允许覆盖已有实现
 
     Returns:
         装饰器函数
@@ -562,33 +600,34 @@ def impl(
         @mutobj.impl(User.greet)
         def greet(self: User) -> str:
             return f"Hello, {self.name}"
-
-    Raises:
-        ValueError: 如果方法已有实现且 override=False
     """
     def decorator(func: Callable[..., Any]) -> Callable[..., Any]:
+        source_module = getattr(func, "__module__", "") or ""
+
         # 处理 property getter
         if isinstance(method, _PropertyGetterPlaceholder):
             prop = method._prop
-            if prop._fget is not None and not override:
-                raise ValueError(
-                    f"Property '{prop.name}' getter already implemented for {prop.owner_cls.__name__}. "
-                    f"Use @mutobj.impl({prop.owner_cls.__name__}.{prop.name}.getter, override=True) to override."
-                )
-            prop._fget = func
-            _impl_sources[(prop.owner_cls, f"{prop.name}.getter")] = getattr(func, "__module__", "") or ""
+            target_cls = prop.owner_cls
+            impl_key = f"{prop.name}.getter"
+
+            became_top = _register_to_chain(
+                target_cls, impl_key, func, source_module
+            )
+            if became_top:
+                prop._fget = func
             return func
 
         # 处理 property setter
         if isinstance(method, _PropertySetterPlaceholder):
             prop = method._prop
-            if prop._fset is not None and not override:
-                raise ValueError(
-                    f"Property '{prop.name}' setter already implemented for {prop.owner_cls.__name__}. "
-                    f"Use @mutobj.impl({prop.owner_cls.__name__}.{prop.name}.setter, override=True) to override."
-                )
-            prop._fset = func
-            _impl_sources[(prop.owner_cls, f"{prop.name}.setter")] = getattr(func, "__module__", "") or ""
+            target_cls = prop.owner_cls
+            impl_key = f"{prop.name}.setter"
+
+            became_top = _register_to_chain(
+                target_cls, impl_key, func, source_module
+            )
+            if became_top:
+                prop._fset = func
             return func
 
         # 获取目标类和方法名
@@ -608,8 +647,8 @@ def impl(
             else:
                 raise ValueError(f"Cannot determine class for method {method}")
 
-            # 查找目标类
-            for cls in _method_registry:
+            # 查找目标类（使用 _class_registry）
+            for cls in _class_registry.values():
                 if cls.__name__ == class_name:
                     target_cls = cls
                     break
@@ -622,51 +661,35 @@ def impl(
         if target_cls is None:
             raise ValueError(f"Cannot find class for method {method_name}")
 
-        # 检查是否为 classmethod 声明
-        declared_classmethods = getattr(target_cls, _DECLARED_CLASSMETHODS, set())
-        is_classmethod = method_name in declared_classmethods
-
-        # 检查是否为 staticmethod 声明
-        declared_staticmethods = getattr(target_cls, _DECLARED_STATICMETHODS, set())
-        is_staticmethod = method_name in declared_staticmethods
-
-        # 检查是否为普通方法声明
-        declared_methods = getattr(target_cls, _DECLARED_METHODS, set())
-        is_method = method_name in declared_methods
-
-        if not (is_method or is_classmethod or is_staticmethod):
+        # 检查方法是否存在于类上
+        if not hasattr(target_cls, method_name):
             raise ValueError(
-                f"Method '{method_name}' is not declared in {target_cls.__name__}"
+                f"Method '{method_name}' does not exist in {target_cls.__name__}"
             )
 
-        # 检查重复实现
-        if target_cls in _method_registry and method_name in _method_registry[target_cls]:
-            if not override:
-                raise ValueError(
-                    f"Method '{method_name}' already implemented for {target_cls.__name__}. "
-                    f"Use @mutobj.impl({target_cls.__name__}.{method_name}, override=True) to override."
-                )
+        # 检查 classmethod/staticmethod 类型
+        existing = target_cls.__dict__.get(method_name)
+        is_classmethod = isinstance(existing, classmethod)
+        is_staticmethod = isinstance(existing, staticmethod)
 
-        # 注册实现
-        if target_cls not in _method_registry:
-            _method_registry[target_cls] = {}
-        _method_registry[target_cls][method_name] = func
-
-        # 记录 impl 来源模块
-        _impl_sources[(target_cls, method_name)] = getattr(func, "__module__", "") or ""
+        # 注册到覆盖链
+        became_top = _register_to_chain(
+            target_cls, method_name, func, source_module
+        )
 
         # 保留类引用，便于后续 override
         func.__mutobj_class__ = target_cls
         func.__name__ = method_name
         func.__qualname__ = f"{target_cls.__name__}.{method_name}"
 
-        # 替换类上的方法（根据类型包装）
-        if is_classmethod:
-            setattr(target_cls, method_name, classmethod(func))
-        elif is_staticmethod:
-            setattr(target_cls, method_name, staticmethod(func))
-        else:
-            setattr(target_cls, method_name, func)
+        # 仅当新条目成为链顶时才更新类方法
+        if became_top:
+            if is_classmethod:
+                setattr(target_cls, method_name, classmethod(func))
+            elif is_staticmethod:
+                setattr(target_cls, method_name, staticmethod(func))
+            else:
+                setattr(target_cls, method_name, func)
 
         return func
 
@@ -674,7 +697,7 @@ def impl(
 
 
 def unregister_module_impls(module_name: str) -> int:
-    """移除指定模块注册的所有 @impl，恢复为 stub
+    """移除指定模块注册的所有 @impl，恢复覆盖链上一层实现
 
     Args:
         module_name: 来源模块的 __name__
@@ -682,39 +705,40 @@ def unregister_module_impls(module_name: str) -> int:
     Returns:
         被卸载的 impl 数量
     """
-    to_remove: list[tuple[type, str]] = [
-        (cls, impl_key)
-        for (cls, impl_key), src in _impl_sources.items()
-        if src == module_name
-    ]
+    removed = 0
 
-    for cls, impl_key in to_remove:
-        del _impl_sources[(cls, impl_key)]
+    for key in list(_impl_chain):
+        cls, impl_key = key
+        chain = _impl_chain[key]
+        was_top_module = chain[-1][1] == module_name if chain else False
 
-        if impl_key.endswith(".getter"):
-            prop_name = impl_key[:-7]
-            prop = _property_registry.get(cls, {}).get(prop_name)
-            if prop is not None:
-                prop._fget = None
-        elif impl_key.endswith(".setter"):
-            prop_name = impl_key[:-7]
-            prop = _property_registry.get(cls, {}).get(prop_name)
-            if prop is not None:
-                prop._fset = None
-        else:
-            # 普通方法、classmethod 或 staticmethod
-            method_name = impl_key
-            if cls in _method_registry and method_name in _method_registry[cls]:
-                del _method_registry[cls][method_name]
+        # 移除指定模块的所有条目（不删除 __default__，不删除 _module_first_seq）
+        before = len(chain)
+        chain[:] = [(f, m, s) for f, m, s in chain if m != module_name]
+        removed += before - len(chain)
 
-            declared_classmethods = getattr(cls, _DECLARED_CLASSMETHODS, set())
-            declared_staticmethods = getattr(cls, _DECLARED_STATICMETHODS, set())
+        if not chain:
+            # 链为空（无默认实现的异常情况），恢复 stub
+            _restore_stub(cls, impl_key)
+            del _impl_chain[key]
+        elif was_top_module:
+            # 活跃实现被卸载，恢复为新链顶
+            _apply_impl(cls, impl_key, chain[-1][0])
+        # 若卸载的是中间层，活跃实现不变，无需操作
 
-            if method_name in declared_classmethods:
-                setattr(cls, method_name, _make_stub_classmethod(method_name, cls))
-            elif method_name in declared_staticmethods:
-                setattr(cls, method_name, _make_stub_staticmethod(method_name, cls))
-            else:
-                setattr(cls, method_name, _make_stub_method(method_name, cls))
+    return removed
 
-    return len(to_remove)
+
+def register_module_impls(*modules: Any) -> None:
+    """加载实现模块（当前为空操作，预留未来统一处理）
+
+    用于在声明文件中显式导入实现模块，防止 IDE 将 import 标记为未使用。
+
+    示例::
+
+        from . import user_impl
+        register_module_impls(user_impl)
+
+    Args:
+        modules: 实现模块（当前不做任何处理）
+    """

@@ -59,19 +59,17 @@ class TestDeclarationDeclaration:
         declared = getattr(Service, _DECLARED_METHODS, set())
         assert "process" in declared
 
-    def test_unimplemented_method_raises(self):
-        """测试调用未实现的方法抛出 NotImplementedError"""
+    def test_default_impl_runs_without_error(self):
+        """测试默认实现（方法体为 ...）直接执行，不抛出异常"""
         class Greeter(mutobj.Declaration):
             def greet(self) -> str:
                 """Say hello"""
                 ...
 
         g = Greeter()
-        with pytest.raises(NotImplementedError) as exc_info:
-            g.greet()
-
-        assert "greet" in str(exc_info.value)
-        assert "not implemented" in str(exc_info.value)
+        # 默认实现执行方法体（... 是表达式，函数隐式返回 None）
+        result = g.greet()
+        assert result is None
 
 
 class TestDeclarationInit:

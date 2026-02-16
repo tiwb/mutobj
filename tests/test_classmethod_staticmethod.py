@@ -19,19 +19,17 @@ class TestClassmethodDeclaration:
         declared = getattr(Factory, _DECLARED_CLASSMETHODS, set())
         assert "create" in declared
 
-    def test_unimplemented_classmethod_raises(self):
-        """测试调用未实现的 classmethod 抛出 NotImplementedError"""
+    def test_default_classmethod_runs_without_error(self):
+        """测试默认 classmethod 实现直接执行，不抛出异常"""
         class Builder(mutobj.Declaration):
             @classmethod
             def build(cls) -> "Builder":
                 """构建实例"""
                 ...
 
-        with pytest.raises(NotImplementedError) as exc_info:
-            Builder.build()
-
-        assert "build" in str(exc_info.value)
-        assert "Classmethod" in str(exc_info.value)
+        # 默认实现执行方法体（... 是表达式，函数隐式返回 None）
+        result = Builder.build()
+        assert result is None
 
 
 class TestClassmethodImplementation:
@@ -91,19 +89,17 @@ class TestStaticmethodDeclaration:
         declared = getattr(Utils, _DECLARED_STATICMETHODS, set())
         assert "helper" in declared
 
-    def test_unimplemented_staticmethod_raises(self):
-        """测试调用未实现的 staticmethod 抛出 NotImplementedError"""
+    def test_default_staticmethod_runs_without_error(self):
+        """测试默认 staticmethod 实现直接执行，不抛出异常"""
         class Calculator(mutobj.Declaration):
             @staticmethod
             def compute(x: int, y: int) -> int:
                 """计算"""
                 ...
 
-        with pytest.raises(NotImplementedError) as exc_info:
-            Calculator.compute(1, 2)
-
-        assert "compute" in str(exc_info.value)
-        assert "Staticmethod" in str(exc_info.value)
+        # 默认实现执行方法体（... 是表达式，函数隐式返回 None）
+        result = Calculator.compute(1, 2)
+        assert result is None
 
 
 class TestStaticmethodImplementation:

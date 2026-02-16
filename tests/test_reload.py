@@ -1,27 +1,18 @@
 """Tests for DeclarationMeta in-place class redefinition (reload)."""
 
-import linecache
 import pytest
 import mutobj
 from mutobj.core import (
     _class_registry,
-    _method_registry,
+    _impl_chain,
     _attribute_registry,
     _DECLARED_METHODS,
 )
 
 
 def _exec_class(source: str, module_name: str = "test_virtual"):
-    """Helper: exec source code that defines a class, simulating module re-execution.
-
-    Injects source into linecache so inspect.getsource() works,
-    which is required for mutobj's stub method detection.
-    """
+    """Helper: exec source code that defines a class, simulating module re-execution."""
     filename = f"mutobj://{module_name}"
-    # Inject into linecache so inspect.getsource() works for stub detection
-    lines = [line + "\n" for line in source.splitlines()]
-    linecache.cache[filename] = (len(source), None, lines, filename)
-
     code = compile(source, filename, "exec")
     globs = {"__name__": module_name, "mutobj": mutobj}
     exec(code, globs)
@@ -51,7 +42,7 @@ class TestInPlaceRedefinition:
         assert cls is cls2
         assert "y" in cls.__annotations__
 
-    def test_redefinition_updates_stub_methods(self):
+    def test_redefinition_updates_declared_methods(self):
         g1 = _exec_class(
             "class Svc(mutobj.Declaration):\n"
             "    def alpha(self) -> str: ...\n"
@@ -84,7 +75,6 @@ class TestInPlaceRedefinition:
         )
         cls2 = g2["Rm"]
         assert cls is cls2
-        # y should no longer be in the annotations (from the new definition)
         annotations = cls.__annotations__
         assert "x" in annotations
 
@@ -116,7 +106,7 @@ class TestInPlaceRedefinition:
         obj = cls()
         assert obj.work() == "working"
 
-        # Redefine the class (adds a new stub method)
+        # Redefine the class (adds a new method)
         g2 = _exec_class(
             "class Worker(mutobj.Declaration):\n"
             "    def work(self) -> str: ...\n"
@@ -128,11 +118,10 @@ class TestInPlaceRedefinition:
         # Old impl should still work
         assert obj.work() == "working"
 
-        # New stub should raise
-        with pytest.raises(NotImplementedError):
-            obj.rest()
+        # New method has default impl (returns None)
+        assert obj.rest() is None
 
-    def test_existing_instances_see_new_stubs(self):
+    def test_existing_instances_see_new_methods(self):
         g1 = _exec_class(
             "class Live(mutobj.Declaration):\n"
             "    def old_method(self) -> str: ...\n"
@@ -146,7 +135,6 @@ class TestInPlaceRedefinition:
             "    def new_method(self) -> str: ...\n"
         )
 
-        # old_method should be gone (or at least new_method is present)
         assert hasattr(obj, "new_method")
 
     def test_different_module_creates_separate_class(self):
@@ -180,7 +168,7 @@ class TestInPlaceRedefinition:
         )
         cls = g1["Migr"]
         assert cls in _attribute_registry
-        assert cls in _method_registry
+        assert (cls, "process") in _impl_chain
 
         # Redefine
         g2 = _exec_class(
@@ -194,4 +182,4 @@ class TestInPlaceRedefinition:
 
         # Registries should point to existing class
         assert cls in _attribute_registry
-        assert cls in _method_registry
+        assert (cls, "process") in _impl_chain
