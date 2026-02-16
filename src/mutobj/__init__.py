@@ -6,5 +6,5 @@ mutobj - Mutable Object Declaration
 
 from mutobj.core import Declaration, Extension, impl, unregister_module_impls
 
-__version__ = "0.2.0"
+__version__ = "0.4.0"
 __all__ = ["Declaration", "Extension", "impl", "unregister_module_impls"]

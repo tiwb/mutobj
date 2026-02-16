@@ -14,4 +14,4 @@ def test_import_mutobj():
 def test_version():
     """测试版本号"""
     import mutobj
-    assert mutobj.__version__ == "0.2.0"
+    assert mutobj.__version__ == "0.4.0"

@@ -29,6 +29,9 @@ _property_registry: dict[type, dict[str, "Property"]] = {}
 # 全局 impl 来源注册表: {(类, 方法名): 模块名}
 _impl_sources: dict[tuple[type, str], str] = {}
 
+# 全局类注册表: {(模块名, qualname): 类}，用于 reload 时的 in-place 更新
+_class_registry: dict[tuple[str, str], type] = {}
+
 # 声明方法标记（用于标识未实现的方法）
 _DECLARED_METHODS: str = "__mutobj_declared_methods__"
 
@@ -215,6 +218,100 @@ class _PropertySetterPlaceholder:
         self._prop = prop
 
 
+def _update_class_inplace(existing: type, new_cls: type) -> None:
+    """Update an existing class in-place with attributes from a new definition.
+
+    Transplants user-defined attributes from new_cls onto existing,
+    removes attributes that were deleted in the new definition,
+    and fixes mutobj internal references.
+    """
+    _SKIP = frozenset({
+        "__dict__", "__weakref__", "__class__", "__mro__",
+        "__subclasses__", "__bases__", "__name__", "__qualname__",
+        "__module__",
+    })
+
+    old_attrs = set(existing.__dict__.keys())
+    new_attrs = set(new_cls.__dict__.keys())
+
+    # Delete attributes removed in new definition
+    for attr in old_attrs - new_attrs - _SKIP:
+        try:
+            delattr(existing, attr)
+        except (AttributeError, TypeError):
+            pass
+
+    # Set/update attributes from new definition
+    for attr in new_attrs - _SKIP:
+        val = new_cls.__dict__[attr]
+        try:
+            setattr(existing, attr, val)
+        except (AttributeError, TypeError):
+            pass
+
+        # Fix __mutobj_class__ references on stubs/impls
+        if callable(val) and hasattr(val, "__mutobj_class__"):
+            val.__mutobj_class__ = existing
+        # Handle classmethod/staticmethod wrappers
+        if isinstance(val, (classmethod, staticmethod)):
+            inner = val.__func__
+            if hasattr(inner, "__mutobj_class__"):
+                inner.__mutobj_class__ = existing
+        # Fix Property.owner_cls
+        if isinstance(val, Property):
+            val.owner_cls = existing
+
+    # Update annotations
+    if "__annotations__" in new_cls.__dict__:
+        existing.__annotations__ = dict(new_cls.__dict__["__annotations__"])
+
+
+def _migrate_registries(existing: type, new_cls: type) -> None:
+    """Move mutobj registry entries from new_cls to existing.
+
+    For method registry: merge (preserving existing impls that new_cls didn't add).
+    Then re-apply all registered impls onto the class to overwrite any stubs
+    that _update_class_inplace transplanted from new_cls.
+    """
+    # Merge method registries (existing impls survive if not overridden by new_cls)
+    if new_cls in _method_registry:
+        new_methods = _method_registry.pop(new_cls)
+        if existing not in _method_registry:
+            _method_registry[existing] = {}
+        _method_registry[existing].update(new_methods)
+
+    # Re-apply all registered impls back onto the class
+    # (stubs from new_cls may have overwritten them during _update_class_inplace)
+    declared_cm = getattr(existing, _DECLARED_CLASSMETHODS, set())
+    declared_sm = getattr(existing, _DECLARED_STATICMETHODS, set())
+    for method_name, impl_func in _method_registry.get(existing, {}).items():
+        if method_name in declared_cm:
+            setattr(existing, method_name, classmethod(impl_func))
+        elif method_name in declared_sm:
+            setattr(existing, method_name, staticmethod(impl_func))
+        else:
+            setattr(existing, method_name, impl_func)
+
+    # Attribute registry: replace (new definition is authoritative)
+    if new_cls in _attribute_registry:
+        _attribute_registry[existing] = _attribute_registry.pop(new_cls)
+
+    # Property registry: replace, fixing owner_cls references
+    if new_cls in _property_registry:
+        props = _property_registry.pop(new_cls)
+        for prop in props.values():
+            prop.owner_cls = existing
+        _property_registry[existing] = props
+
+    # Migrate _impl_sources entries from new_cls to existing
+    keys_to_migrate = [
+        (cls, key) for (cls, key) in _impl_sources
+        if cls is new_cls
+    ]
+    for cls, key in keys_to_migrate:
+        _impl_sources[(existing, key)] = _impl_sources.pop((cls, key))
+
+
 class DeclarationMeta(type):
     """mutobj.Declaration 的元类，处理声明解析和方法注册"""
 
@@ -224,6 +321,14 @@ class DeclarationMeta(type):
         bases: tuple[type, ...],
         namespace: dict[str, Any]
     ) -> DeclarationMeta:
+        # 获取 reload 用的 key
+        module = namespace.get("__module__", "")
+        qualname = namespace.get("__qualname__", name)
+        key = (module, qualname)
+
+        # 查找已存在的类（reload 场景）
+        existing = _class_registry.get(key)
+
         # 识别声明的方法（桩方法）
         declared_methods: set[str] = set()
         # 识别声明的 property
@@ -233,7 +338,7 @@ class DeclarationMeta(type):
         # 识别声明的 staticmethod
         declared_staticmethods: set[str] = set()
 
-        # 创建类
+        # 创建类（DeclarationMeta 需要处理 stubs、属性描述符、注册表等）
         cls = super().__new__(mcs, name, bases, namespace)
 
         # 跳过 Declaration 基类本身
@@ -325,6 +430,14 @@ class DeclarationMeta(type):
         if cls not in _method_registry:
             _method_registry[cls] = {}
 
+        # Reload: 如果已存在同 (module, qualname) 的类，就地更新
+        if existing is not None and existing is not cls:
+            _update_class_inplace(existing, cls)
+            _migrate_registries(existing, cls)
+            return existing
+
+        # 首次定义：注册到 _class_registry
+        _class_registry[key] = cls
         return cls
 
 
