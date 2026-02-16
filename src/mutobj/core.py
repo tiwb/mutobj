@@ -12,7 +12,7 @@ import textwrap
 import weakref
 from typing import TypeVar, Generic, Callable, Any, get_type_hints, TYPE_CHECKING
 
-__all__ = ["Declaration", "Extension", "impl"]
+__all__ = ["Declaration", "Extension", "impl", "unregister_module_impls"]
 
 # 类型变量
 T = TypeVar("T", bound="Declaration")
@@ -25,6 +25,9 @@ _attribute_registry: dict[type, dict[str, Any]] = {}
 
 # 全局 property 注册表: {类: {property名: Property}}
 _property_registry: dict[type, dict[str, "Property"]] = {}
+
+# 全局 impl 来源注册表: {(类, 方法名): 模块名}
+_impl_sources: dict[tuple[type, str], str] = {}
 
 # 声明方法标记（用于标识未实现的方法）
 _DECLARED_METHODS: str = "__mutobj_declared_methods__"
@@ -460,6 +463,7 @@ def impl(
                     f"Use @mutobj.impl({prop.owner_cls.__name__}.{prop.name}.getter, override=True) to override."
                 )
             prop._fget = func
+            _impl_sources[(prop.owner_cls, f"{prop.name}.getter")] = getattr(func, "__module__", "") or ""
             return func
 
         # 处理 property setter
@@ -471,6 +475,7 @@ def impl(
                     f"Use @mutobj.impl({prop.owner_cls.__name__}.{prop.name}.setter, override=True) to override."
                 )
             prop._fset = func
+            _impl_sources[(prop.owner_cls, f"{prop.name}.setter")] = getattr(func, "__module__", "") or ""
             return func
 
         # 获取目标类和方法名
@@ -534,6 +539,9 @@ def impl(
             _method_registry[target_cls] = {}
         _method_registry[target_cls][method_name] = func
 
+        # 记录 impl 来源模块
+        _impl_sources[(target_cls, method_name)] = getattr(func, "__module__", "") or ""
+
         # 保留类引用，便于后续 override
         func.__mutobj_class__ = target_cls
         func.__name__ = method_name
@@ -550,3 +558,50 @@ def impl(
         return func
 
     return decorator
+
+
+def unregister_module_impls(module_name: str) -> int:
+    """移除指定模块注册的所有 @impl，恢复为 stub
+
+    Args:
+        module_name: 来源模块的 __name__
+
+    Returns:
+        被卸载的 impl 数量
+    """
+    to_remove: list[tuple[type, str]] = [
+        (cls, impl_key)
+        for (cls, impl_key), src in _impl_sources.items()
+        if src == module_name
+    ]
+
+    for cls, impl_key in to_remove:
+        del _impl_sources[(cls, impl_key)]
+
+        if impl_key.endswith(".getter"):
+            prop_name = impl_key[:-7]
+            prop = _property_registry.get(cls, {}).get(prop_name)
+            if prop is not None:
+                prop._fget = None
+        elif impl_key.endswith(".setter"):
+            prop_name = impl_key[:-7]
+            prop = _property_registry.get(cls, {}).get(prop_name)
+            if prop is not None:
+                prop._fset = None
+        else:
+            # 普通方法、classmethod 或 staticmethod
+            method_name = impl_key
+            if cls in _method_registry and method_name in _method_registry[cls]:
+                del _method_registry[cls][method_name]
+
+            declared_classmethods = getattr(cls, _DECLARED_CLASSMETHODS, set())
+            declared_staticmethods = getattr(cls, _DECLARED_STATICMETHODS, set())
+
+            if method_name in declared_classmethods:
+                setattr(cls, method_name, _make_stub_classmethod(method_name, cls))
+            elif method_name in declared_staticmethods:
+                setattr(cls, method_name, _make_stub_staticmethod(method_name, cls))
+            else:
+                setattr(cls, method_name, _make_stub_method(method_name, cls))
+
+    return len(to_remove)
