@@ -3,14 +3,14 @@ requires = ["setuptools>=61.0", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "pyic"
+name = "mutobj"
 version = "0.2.0"
-description = "Python Interface Class - 支持声明与实现分离的类定义库"
+description = "Mutable Object Declaration - 支持声明与实现分离的类定义库"
 readme = "README.md"
 license = {text = "MIT"}
 requires-python = ">=3.11"
 authors = [
-    {name = "pyic contributors"}
+    {name = "mutobj contributors"}
 ]
 keywords = ["interface", "class", "separation", "declaration", "implementation", "extension"]
 classifiers = [
@@ -28,10 +28,10 @@ classifiers = [
 ]
 
 [project.urls]
-Homepage = "https://github.com/pyic/pyic"
-Documentation = "https://github.com/pyic/pyic#readme"
-Repository = "https://github.com/pyic/pyic"
-Issues = "https://github.com/pyic/pyic/issues"
+Homepage = "https://github.com/tiwb/mutobj"
+Documentation = "https://github.com/tiwb/mutobj#readme"
+Repository = "https://github.com/tiwb/mutobj"
+Issues = "https://github.com/tiwb/mutobj/issues"
 
 [project.optional-dependencies]
 dev = [
@@ -45,7 +45,7 @@ dev = [
 where = ["src"]
 
 [tool.setuptools.package-data]
-pyic = ["py.typed"]
+mutobj = ["py.typed"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

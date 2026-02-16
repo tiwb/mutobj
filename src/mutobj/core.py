@@ -1,7 +1,7 @@
 """
-pyic 核心模块
+mutobj 核心模块
 
-包含 Object 基类、Extension 泛型基类和 impl 装饰器
+包含 Declaration 基类、Extension 泛型基类和 impl 装饰器
 """
 
 from __future__ import annotations
@@ -12,10 +12,10 @@ import textwrap
 import weakref
 from typing import TypeVar, Generic, Callable, Any, get_type_hints, TYPE_CHECKING
 
-__all__ = ["Object", "Extension", "impl"]
+__all__ = ["Declaration", "Extension", "impl"]
 
 # 类型变量
-T = TypeVar("T", bound="Object")
+T = TypeVar("T", bound="Declaration")
 
 # 全局方法注册表: {类: {方法名: 实现函数}}
 _method_registry: dict[type, dict[str, Callable[..., Any]]] = {}
@@ -23,20 +23,20 @@ _method_registry: dict[type, dict[str, Callable[..., Any]]] = {}
 # 全局属性注册表: {类: {属性名: 类型注解}}
 _attribute_registry: dict[type, dict[str, Any]] = {}
 
-# 全局 property 注册表: {类: {property名: PyicProperty}}
-_property_registry: dict[type, dict[str, "PyicProperty"]] = {}
+# 全局 property 注册表: {类: {property名: Property}}
+_property_registry: dict[type, dict[str, "Property"]] = {}
 
 # 声明方法标记（用于标识未实现的方法）
-_DECLARED_METHODS: str = "__pyic_declared_methods__"
+_DECLARED_METHODS: str = "__mutobj_declared_methods__"
 
 # 声明 property 标记
-_DECLARED_PROPERTIES: str = "__pyic_declared_properties__"
+_DECLARED_PROPERTIES: str = "__mutobj_declared_properties__"
 
 # 声明 classmethod 标记
-_DECLARED_CLASSMETHODS: str = "__pyic_declared_classmethods__"
+_DECLARED_CLASSMETHODS: str = "__mutobj_declared_classmethods__"
 
 # 声明 staticmethod 标记
-_DECLARED_STATICMETHODS: str = "__pyic_declared_staticmethods__"
+_DECLARED_STATICMETHODS: str = "__mutobj_declared_staticmethods__"
 
 
 def _is_stub_method(func: Callable[..., Any]) -> bool:
@@ -93,12 +93,12 @@ def _make_stub_method(name: str, cls: type) -> Callable[..., Any]:
     def stub(self: Any, *args: Any, **kwargs: Any) -> Any:
         raise NotImplementedError(
             f"Method '{name}' is declared in {cls.__name__} but not implemented. "
-            f"Use @pyic.impl({cls.__name__}.{name}) to provide implementation."
+            f"Use @mutobj.impl({cls.__name__}.{name}) to provide implementation."
         )
     stub.__name__ = name
     stub.__qualname__ = f"{cls.__name__}.{name}"
     # 存储对类的引用，便于 impl 装饰器查找
-    stub.__pyic_class__ = cls
+    stub.__mutobj_class__ = cls
     return stub
 
 
@@ -107,12 +107,12 @@ def _make_stub_classmethod(name: str, cls: type) -> classmethod:
     def stub(cls_arg: type, *args: Any, **kwargs: Any) -> Any:
         raise NotImplementedError(
             f"Classmethod '{name}' is declared in {cls.__name__} but not implemented. "
-            f"Use @pyic.impl({cls.__name__}.{name}) to provide implementation."
+            f"Use @mutobj.impl({cls.__name__}.{name}) to provide implementation."
         )
     stub.__name__ = name
     stub.__qualname__ = f"{cls.__name__}.{name}"
-    stub.__pyic_class__ = cls
-    stub.__pyic_is_classmethod__ = True
+    stub.__mutobj_class__ = cls
+    stub.__mutobj_is_classmethod__ = True
     return classmethod(stub)
 
 
@@ -121,22 +121,22 @@ def _make_stub_staticmethod(name: str, cls: type) -> staticmethod:
     def stub(*args: Any, **kwargs: Any) -> Any:
         raise NotImplementedError(
             f"Staticmethod '{name}' is declared in {cls.__name__} but not implemented. "
-            f"Use @pyic.impl({cls.__name__}.{name}) to provide implementation."
+            f"Use @mutobj.impl({cls.__name__}.{name}) to provide implementation."
         )
     stub.__name__ = name
     stub.__qualname__ = f"{cls.__name__}.{name}"
-    stub.__pyic_class__ = cls
-    stub.__pyic_is_staticmethod__ = True
+    stub.__mutobj_class__ = cls
+    stub.__mutobj_is_staticmethod__ = True
     return staticmethod(stub)
 
 
-class PyicAttributeDescriptor:
-    """pyic 属性描述符，用于拦截属性访问"""
+class AttributeDescriptor:
+    """属性描述符，用于拦截属性访问"""
 
     def __init__(self, name: str, annotation: Any):
         self.name = name
         self.annotation = annotation
-        self.storage_name = f"_pyic_attr_{name}"
+        self.storage_name = f"_mutobj_attr_{name}"
 
     def __get__(self, obj: Any, objtype: type | None = None) -> Any:
         if obj is None:
@@ -160,8 +160,8 @@ class PyicAttributeDescriptor:
             )
 
 
-class PyicProperty:
-    """pyic property 描述符，支持声明与实现分离"""
+class Property:
+    """Property 描述符，支持声明与实现分离"""
 
     def __init__(self, name: str, owner_cls: type):
         self.name = name
@@ -175,7 +175,7 @@ class PyicProperty:
         if self._fget is None:
             raise NotImplementedError(
                 f"Property '{self.name}' getter is not implemented. "
-                f"Use @pyic.impl({self.owner_cls.__name__}.{self.name}.getter) to provide implementation."
+                f"Use @mutobj.impl({self.owner_cls.__name__}.{self.name}.getter) to provide implementation."
             )
         return self._fget(obj)
 
@@ -183,44 +183,44 @@ class PyicProperty:
         if self._fset is None:
             raise AttributeError(
                 f"Property '{self.name}' is read-only or setter is not implemented. "
-                f"Use @pyic.impl({self.owner_cls.__name__}.{self.name}.setter) to provide implementation."
+                f"Use @mutobj.impl({self.owner_cls.__name__}.{self.name}.setter) to provide implementation."
             )
         self._fset(obj, value)
 
     @property
-    def getter(self) -> "_PyicPropertyGetterPlaceholder":
-        """返回 getter 占位符，用于 @pyic.impl(Cls.prop.getter) 语法"""
-        return _PyicPropertyGetterPlaceholder(self)
+    def getter(self) -> "_PropertyGetterPlaceholder":
+        """返回 getter 占位符，用于 @mutobj.impl(Cls.prop.getter) 语法"""
+        return _PropertyGetterPlaceholder(self)
 
     @property
-    def setter(self) -> "_PyicPropertySetterPlaceholder":
-        """返回 setter 占位符，用于 @pyic.impl(Cls.prop.setter) 语法"""
-        return _PyicPropertySetterPlaceholder(self)
+    def setter(self) -> "_PropertySetterPlaceholder":
+        """返回 setter 占位符，用于 @mutobj.impl(Cls.prop.setter) 语法"""
+        return _PropertySetterPlaceholder(self)
 
 
-class _PyicPropertyGetterPlaceholder:
+class _PropertyGetterPlaceholder:
     """Property getter 占位符"""
 
-    def __init__(self, prop: PyicProperty):
+    def __init__(self, prop: Property):
         self._prop = prop
 
 
-class _PyicPropertySetterPlaceholder:
+class _PropertySetterPlaceholder:
     """Property setter 占位符"""
 
-    def __init__(self, prop: PyicProperty):
+    def __init__(self, prop: Property):
         self._prop = prop
 
 
-class ObjectMeta(type):
-    """pyic.Object 的元类，处理声明解析和方法注册"""
+class DeclarationMeta(type):
+    """mutobj.Declaration 的元类，处理声明解析和方法注册"""
 
     def __new__(
         mcs,
         name: str,
         bases: tuple[type, ...],
         namespace: dict[str, Any]
-    ) -> ObjectMeta:
+    ) -> DeclarationMeta:
         # 识别声明的方法（桩方法）
         declared_methods: set[str] = set()
         # 识别声明的 property
@@ -233,8 +233,8 @@ class ObjectMeta(type):
         # 创建类
         cls = super().__new__(mcs, name, bases, namespace)
 
-        # 跳过 Object 基类本身
-        if name == "Object" and not bases:
+        # 跳过 Declaration 基类本身
+        if name == "Declaration" and not bases:
             return cls
 
         # 获取类型注解（Python 3.14+ 使用 PEP 649 延迟注解）
@@ -244,21 +244,21 @@ class ObjectMeta(type):
         attr_registry: dict[str, Any] = {}
         for attr_name, attr_type in annotations.items():
             # 跳过已经有值的类属性（如 classmethod 等）
-            if attr_name in namespace and not isinstance(namespace[attr_name], PyicAttributeDescriptor):
+            if attr_name in namespace and not isinstance(namespace[attr_name], AttributeDescriptor):
                 # 检查是否为方法或 property
                 if callable(namespace[attr_name]) or isinstance(namespace[attr_name], property):
                     continue
 
             # 为属性创建描述符
-            if not hasattr(cls, attr_name) or not isinstance(getattr(cls, attr_name), PyicAttributeDescriptor):
-                descriptor = PyicAttributeDescriptor(attr_name, attr_type)
+            if not hasattr(cls, attr_name) or not isinstance(getattr(cls, attr_name), AttributeDescriptor):
+                descriptor = AttributeDescriptor(attr_name, attr_type)
                 setattr(cls, attr_name, descriptor)
             attr_registry[attr_name] = attr_type
 
         _attribute_registry[cls] = attr_registry
 
         # 处理 property 声明
-        prop_registry: dict[str, PyicProperty] = {}
+        prop_registry: dict[str, Property] = {}
         for prop_name, prop_value in namespace.items():
             if prop_name.startswith("_"):
                 continue
@@ -266,10 +266,10 @@ class ObjectMeta(type):
                 # 检查是否为桩 property（getter 是桩方法）
                 if prop_value.fget is not None and _is_stub_method(prop_value.fget):
                     declared_properties.add(prop_name)
-                    # 创建 PyicProperty 替换原 property
-                    pyic_prop = PyicProperty(prop_name, cls)
-                    setattr(cls, prop_name, pyic_prop)
-                    prop_registry[prop_name] = pyic_prop
+                    # 创建 Property 替换原 property
+                    mutobj_prop = Property(prop_name, cls)
+                    setattr(cls, prop_name, mutobj_prop)
+                    prop_registry[prop_name] = mutobj_prop
 
         _property_registry[cls] = prop_registry
         setattr(cls, _DECLARED_PROPERTIES, declared_properties)
@@ -325,9 +325,9 @@ class ObjectMeta(type):
         return cls
 
 
-class Object(metaclass=ObjectMeta):
+class Declaration(metaclass=DeclarationMeta):
     """
-    pyic 声明类的基类
+    mutobj 声明类的基类
 
     用于定义接口声明，方法实现通过 @impl 装饰器在其他文件中提供
     """
@@ -343,7 +343,7 @@ class Object(metaclass=ObjectMeta):
 
 
 # Extension 视图缓存
-_extension_cache: weakref.WeakKeyDictionary[Object, dict[type, Any]] = weakref.WeakKeyDictionary()
+_extension_cache: weakref.WeakKeyDictionary[Declaration, dict[type, Any]] = weakref.WeakKeyDictionary()
 
 
 class ExtensionMeta(type):
@@ -366,11 +366,11 @@ class Extension(Generic[T], metaclass=ExtensionMeta):
     """
     Extension 泛型基类
 
-    用于为 Object 子类提供扩展功能和私有状态
+    用于为 Declaration 子类提供扩展功能和私有状态
 
     示例::
 
-        class UserExt(pyic.Extension[User]):
+        class UserExt(mutobj.Extension[User]):
             _counter: int = 0
 
             def _helper(self) -> str:
@@ -378,7 +378,7 @@ class Extension(Generic[T], metaclass=ExtensionMeta):
     """
 
     _target_class: type | None = None
-    _instance: Object | None = None
+    _instance: Declaration | None = None
 
     def __init__(self) -> None:
         self._instance = None
@@ -389,7 +389,7 @@ class Extension(Generic[T], metaclass=ExtensionMeta):
         获取实例的 Extension 视图
 
         Args:
-            instance: pyic.Object 的实例
+            instance: mutobj.Declaration 的实例
 
         Returns:
             缓存的 Extension 视图对象
@@ -427,7 +427,7 @@ class Extension(Generic[T], metaclass=ExtensionMeta):
 
 
 def impl(
-    method: Callable[..., Any] | _PyicPropertyGetterPlaceholder | _PyicPropertySetterPlaceholder,
+    method: Callable[..., Any] | _PropertyGetterPlaceholder | _PropertySetterPlaceholder,
     *,
     override: bool = False
 ) -> Callable[[Callable[..., Any]], Callable[..., Any]]:
@@ -435,7 +435,7 @@ def impl(
     方法实现装饰器
 
     Args:
-        method: 要实现的方法（来自 Object 子类）
+        method: 要实现的方法（来自 Declaration 子类）
         override: 是否允许覆盖已有实现
 
     Returns:
@@ -443,7 +443,7 @@ def impl(
 
     示例::
 
-        @pyic.impl(User.greet)
+        @mutobj.impl(User.greet)
         def greet(self: User) -> str:
             return f"Hello, {self.name}"
 
@@ -452,23 +452,23 @@ def impl(
     """
     def decorator(func: Callable[..., Any]) -> Callable[..., Any]:
         # 处理 property getter
-        if isinstance(method, _PyicPropertyGetterPlaceholder):
+        if isinstance(method, _PropertyGetterPlaceholder):
             prop = method._prop
             if prop._fget is not None and not override:
                 raise ValueError(
                     f"Property '{prop.name}' getter already implemented for {prop.owner_cls.__name__}. "
-                    f"Use @pyic.impl({prop.owner_cls.__name__}.{prop.name}.getter, override=True) to override."
+                    f"Use @mutobj.impl({prop.owner_cls.__name__}.{prop.name}.getter, override=True) to override."
                 )
             prop._fget = func
             return func
 
         # 处理 property setter
-        if isinstance(method, _PyicPropertySetterPlaceholder):
+        if isinstance(method, _PropertySetterPlaceholder):
             prop = method._prop
             if prop._fset is not None and not override:
                 raise ValueError(
                     f"Property '{prop.name}' setter already implemented for {prop.owner_cls.__name__}. "
-                    f"Use @pyic.impl({prop.owner_cls.__name__}.{prop.name}.setter, override=True) to override."
+                    f"Use @mutobj.impl({prop.owner_cls.__name__}.{prop.name}.setter, override=True) to override."
                 )
             prop._fset = func
             return func
@@ -480,7 +480,7 @@ def impl(
         method_name = getattr(method, "__name__", "")
 
         # 优先使用存储的类引用
-        target_cls = getattr(method, "__pyic_class__", None)
+        target_cls = getattr(method, "__mutobj_class__", None)
 
         if target_cls is None:
             # 从方法获取所属类
@@ -526,7 +526,7 @@ def impl(
             if not override:
                 raise ValueError(
                     f"Method '{method_name}' already implemented for {target_cls.__name__}. "
-                    f"Use @pyic.impl({target_cls.__name__}.{method_name}, override=True) to override."
+                    f"Use @mutobj.impl({target_cls.__name__}.{method_name}, override=True) to override."
                 )
 
         # 注册实现
@@ -535,7 +535,7 @@ def impl(
         _method_registry[target_cls][method_name] = func
 
         # 保留类引用，便于后续 override
-        func.__pyic_class__ = target_cls
+        func.__mutobj_class__ = target_cls
         func.__name__ = method_name
         func.__qualname__ = f"{target_cls.__name__}.{method_name}"
 

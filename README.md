@@ -1,9 +1,9 @@
-# pyic
+# mutobj
 
 [![Python 3.11+](https://img.shields.io/badge/python-3.11+-blue.svg)](https://www.python.org/downloads/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
-**pyic** (Python Interface Class) - 支持声明与实现分离的 Python 类定义库。
+**mutobj** (Mutable Object Declaration) - 支持声明与实现分离的 Python 类定义库。
 
 ## 特性
 
@@ -16,7 +16,7 @@
 ## 安装
 
 ```bash
-pip install pyic
+pip install mutobj
 ```
 
 ## 快速开始
@@ -24,9 +24,9 @@ pip install pyic
 **声明文件 (`user.py`)**
 
 ```python
-import pyic
+import mutobj
 
-class User(pyic.Object):
+class User(mutobj.Declaration):
     name: str
     age: int
 
@@ -38,10 +38,10 @@ class User(pyic.Object):
 **实现文件 (`user_impl.py`)**
 
 ```python
-import pyic
+import mutobj
 from .user import User
 
-@pyic.impl(User.greet)
+@mutobj.impl(User.greet)
 def greet(self: User) -> str:
     return f"Hello, I'm {self.name}!"
 ```
@@ -61,13 +61,13 @@ print(user.greet())  # "Hello, I'm Alice!"
 为类添加私有状态：
 
 ```python
-class UserExt(pyic.Extension[User]):
+class UserExt(mutobj.Extension[User]):
     _login_count: int = 0
 
     def __extension_init__(self):
         self._login_count = 0
 
-@pyic.impl(User.greet)
+@mutobj.impl(User.greet)
 def greet(self: User) -> str:
     ext = UserExt.of(self)
     ext._login_count += 1
@@ -89,8 +89,8 @@ def greet(self: User) -> str:
 
 ## 文档
 
-- [使用指南](doc/guide.md)
-- [API 参考](doc/api/reference.md)
+- [使用指南](docs/guide.md)
+- [API 参考](docs/api/reference.md)
 
 ## 开发
 
@@ -102,7 +102,7 @@ pip install -e ".[dev]"
 pytest
 
 # 类型检查
-mypy src/pyic
+mypy src/mutobj
 ```
 
 ## License

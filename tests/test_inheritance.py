@@ -1,7 +1,7 @@
-"""测试 pyic 继承支持"""
+"""测试 mutobj 继承支持"""
 
 import pytest
-import pyic
+import mutobj
 
 
 class TestBasicInheritance:
@@ -9,7 +9,7 @@ class TestBasicInheritance:
 
     def test_subclass_inherits_attributes(self):
         """测试子类继承父类属性"""
-        class Animal(pyic.Object):
+        class Animal(mutobj.Declaration):
             name: str
             age: int
 
@@ -23,14 +23,14 @@ class TestBasicInheritance:
 
     def test_subclass_inherits_method_implementation(self):
         """测试子类继承父类方法实现"""
-        class Vehicle(pyic.Object):
+        class Vehicle(mutobj.Declaration):
             brand: str
 
             def start(self) -> str:
                 """启动"""
                 ...
 
-        @pyic.impl(Vehicle.start)
+        @mutobj.impl(Vehicle.start)
         def start(self: Vehicle) -> str:
             return f"{self.brand} started"
 
@@ -42,13 +42,13 @@ class TestBasicInheritance:
 
     def test_multi_level_inheritance(self):
         """测试多级继承"""
-        class A(pyic.Object):
+        class A(mutobj.Declaration):
             a: int
 
             def method_a(self) -> int:
                 ...
 
-        @pyic.impl(A.method_a)
+        @mutobj.impl(A.method_a)
         def method_a(self: A) -> int:
             return self.a
 
@@ -70,13 +70,13 @@ class TestMethodOverride:
 
     def test_subclass_can_override_method(self):
         """测试子类可以覆盖父类方法"""
-        class Animal(pyic.Object):
+        class Animal(mutobj.Declaration):
             name: str
 
             def speak(self) -> str:
                 ...
 
-        @pyic.impl(Animal.speak)
+        @mutobj.impl(Animal.speak)
         def animal_speak(self: Animal) -> str:
             return f"{self.name} makes a sound"
 
@@ -84,7 +84,7 @@ class TestMethodOverride:
             def speak(self) -> str:
                 ...
 
-        @pyic.impl(Dog.speak)
+        @mutobj.impl(Dog.speak)
         def dog_speak(self: Dog) -> str:
             return f"{self.name} barks"
 
@@ -96,13 +96,13 @@ class TestMethodOverride:
 
     def test_override_does_not_affect_parent(self):
         """测试子类覆盖不影响父类"""
-        class Base(pyic.Object):
+        class Base(mutobj.Declaration):
             value: int
 
             def compute(self) -> int:
                 ...
 
-        @pyic.impl(Base.compute)
+        @mutobj.impl(Base.compute)
         def base_compute(self: Base) -> int:
             return self.value
 
@@ -110,7 +110,7 @@ class TestMethodOverride:
             def compute(self) -> int:
                 ...
 
-        @pyic.impl(Derived.compute)
+        @mutobj.impl(Derived.compute)
         def derived_compute(self: Derived) -> int:
             return self.value * 2
 
@@ -126,7 +126,7 @@ class TestPropertyInheritance:
 
     def test_subclass_inherits_property(self):
         """测试子类继承 property"""
-        class Person(pyic.Object):
+        class Person(mutobj.Declaration):
             first_name: str
             last_name: str
 
@@ -134,7 +134,7 @@ class TestPropertyInheritance:
             def full_name(self) -> str:
                 ...
 
-        @pyic.impl(Person.full_name.getter)
+        @mutobj.impl(Person.full_name.getter)
         def full_name(self: Person) -> str:
             return f"{self.first_name} {self.last_name}"
 
@@ -150,14 +150,14 @@ class TestClassmethodStaticmethodInheritance:
 
     def test_subclass_inherits_classmethod(self):
         """测试子类继承 classmethod"""
-        class Factory(pyic.Object):
+        class Factory(mutobj.Declaration):
             value: int
 
             @classmethod
             def create(cls, v: int) -> "Factory":
                 ...
 
-        @pyic.impl(Factory.create)
+        @mutobj.impl(Factory.create)
         def create(cls, v: int) -> Factory:
             obj = cls()
             obj.value = v
@@ -173,12 +173,12 @@ class TestClassmethodStaticmethodInheritance:
 
     def test_subclass_inherits_staticmethod(self):
         """测试子类继承 staticmethod"""
-        class Utils(pyic.Object):
+        class Utils(mutobj.Declaration):
             @staticmethod
             def helper(x: int) -> int:
                 ...
 
-        @pyic.impl(Utils.helper)
+        @mutobj.impl(Utils.helper)
         def helper(x: int) -> int:
             return x * 2
 
@@ -193,13 +193,13 @@ class TestExtensionWithInheritance:
 
     def test_extension_with_inherited_class(self):
         """测试 Extension 与继承类配合"""
-        class Animal(pyic.Object):
+        class Animal(mutobj.Declaration):
             name: str
 
             def greet(self) -> str:
                 ...
 
-        class AnimalExt(pyic.Extension[Animal]):
+        class AnimalExt(mutobj.Extension[Animal]):
             _count: int = 0
 
             def __extension_init__(self):
@@ -208,7 +208,7 @@ class TestExtensionWithInheritance:
             def increment(self):
                 self._count += 1
 
-        @pyic.impl(Animal.greet)
+        @mutobj.impl(Animal.greet)
         def greet(self: Animal) -> str:
             ext = AnimalExt.of(self)
             ext.increment()

@@ -1,8 +1,8 @@
-# pyic 使用指南
+# mutobj 使用指南
 
 ## 简介
 
-pyic (Python Interface Class) 让你可以将类的声明和实现分离到不同文件中，类似于 C/C++ 的头文件和实现文件模式。
+mutobj (Mutable Object Declaration) 让你可以将类的声明和实现分离到不同文件中，类似于 C/C++ 的头文件和实现文件模式。
 
 **核心特性：**
 - 声明与实现分离
@@ -16,7 +16,7 @@ pyic (Python Interface Class) 让你可以将类的声明和实现分离到不�
 ### 安装
 
 ```bash
-pip install pyic
+pip install mutobj
 ```
 
 ### 基本用法
@@ -24,9 +24,9 @@ pip install pyic
 **1. 声明文件 (`models/user.py`)**
 
 ```python
-import pyic
+import mutobj
 
-class User(pyic.Object):
+class User(mutobj.Declaration):
     # 属性声明
     name: str
     email: str
@@ -45,14 +45,14 @@ class User(pyic.Object):
 **2. 实现文件 (`models/user_impl.py`)**
 
 ```python
-import pyic
+import mutobj
 from .user import User
 
-@pyic.impl(User.greet)
+@mutobj.impl(User.greet)
 def greet(self: User) -> str:
     return f"Hello, I'm {self.name}!"
 
-@pyic.impl(User.is_adult)
+@mutobj.impl(User.is_adult)
 def is_adult(self: User) -> bool:
     return self.age >= 18
 ```
@@ -74,9 +74,9 @@ Extension 允许你为类添加私有状态和辅助方法，而不污染原始�
 
 ```python
 # models/counter.py
-import pyic
+import mutobj
 
-class Counter(pyic.Object):
+class Counter(mutobj.Declaration):
     name: str
 
     def increment(self) -> int:
@@ -90,23 +90,23 @@ class Counter(pyic.Object):
 
 ```python
 # models/counter_impl.py
-import pyic
+import mutobj
 from .counter import Counter
 
-class CounterExt(pyic.Extension[Counter]):
+class CounterExt(mutobj.Extension[Counter]):
     """Counter 的扩展，存储私有计数状态"""
     _count: int = 0
 
     def __extension_init__(self):
         self._count = 0
 
-@pyic.impl(Counter.increment)
+@mutobj.impl(Counter.increment)
 def increment(self: Counter) -> int:
     ext = CounterExt.of(self)
     ext._count += 1
     return ext._count
 
-@pyic.impl(Counter.reset)
+@mutobj.impl(Counter.reset)
 def reset(self: Counter) -> None:
     ext = CounterExt.of(self)
     ext._count = 0
@@ -128,9 +128,9 @@ print(c.increment())  # 1
 
 ```python
 # models/product.py
-import pyic
+import mutobj
 
-class Product(pyic.Object):
+class Product(mutobj.Declaration):
     name: str
     _price: float
 
@@ -147,20 +147,20 @@ class Product(pyic.Object):
 
 ```python
 # models/product_impl.py
-import pyic
+import mutobj
 from .product import Product
 
-@pyic.impl(Product.price.getter)
+@mutobj.impl(Product.price.getter)
 def get_price(self: Product) -> float:
     return self._price
 
-@pyic.impl(Product.price.setter)
+@mutobj.impl(Product.price.setter)
 def set_price(self: Product, value: float) -> None:
     if value < 0:
         raise ValueError("Price cannot be negative")
     self._price = value
 
-@pyic.impl(Product.display_price.getter)
+@mutobj.impl(Product.display_price.getter)
 def display_price(self: Product) -> str:
     return f"${self._price:.2f}"
 ```
@@ -169,9 +169,9 @@ def display_price(self: Product) -> str:
 
 ```python
 # models/factory.py
-import pyic
+import mutobj
 
-class UserFactory(pyic.Object):
+class UserFactory(mutobj.Declaration):
     name: str
     role: str
 
@@ -193,37 +193,37 @@ class UserFactory(pyic.Object):
 
 ```python
 # models/factory_impl.py
-import pyic
+import mutobj
 from .factory import UserFactory
 
-@pyic.impl(UserFactory.create_admin)
+@mutobj.impl(UserFactory.create_admin)
 def create_admin(cls, name: str) -> UserFactory:
     user = cls()
     user.name = name
     user.role = "admin"
     return user
 
-@pyic.impl(UserFactory.create_guest)
+@mutobj.impl(UserFactory.create_guest)
 def create_guest(cls) -> UserFactory:
     user = cls()
     user.name = "Guest"
     user.role = "guest"
     return user
 
-@pyic.impl(UserFactory.validate_name)
+@mutobj.impl(UserFactory.validate_name)
 def validate_name(name: str) -> bool:
     return len(name) >= 2 and name.isalnum()
 ```
 
 ## 继承
 
-pyic 完全支持类继承。
+mutobj 完全支持类继承。
 
 ```python
 # models/animals.py
-import pyic
+import mutobj
 
-class Animal(pyic.Object):
+class Animal(mutobj.Declaration):
     name: str
 
     def speak(self) -> str:
@@ -252,26 +252,26 @@ class Bird(Animal):
 
 ```python
 # models/animals_impl.py
-import pyic
+import mutobj
 from .animals import Animal, Dog, Bird
 
-@pyic.impl(Animal.speak)
+@mutobj.impl(Animal.speak)
 def animal_speak(self: Animal) -> str:
     return f"{self.name} makes a sound"
 
-@pyic.impl(Animal.move)
+@mutobj.impl(Animal.move)
 def animal_move(self: Animal) -> str:
     return f"{self.name} moves"
 
-@pyic.impl(Dog.speak)
+@mutobj.impl(Dog.speak)
 def dog_speak(self: Dog) -> str:
     return f"{self.name} barks!"
 
-@pyic.impl(Bird.speak)
+@mutobj.impl(Bird.speak)
 def bird_speak(self: Bird) -> str:
     return f"{self.name} chirps!"
 
-@pyic.impl(Bird.fly)
+@mutobj.impl(Bird.fly)
 def bird_fly(self: Bird) -> str:
     return f"{self.name} flies with {self.wingspan}m wingspan"
 ```
@@ -345,11 +345,11 @@ import models.user_impl  # 不要忘记这行！
 使用 `override=True`：
 
 ```python
-@pyic.impl(User.greet, override=True)
+@mutobj.impl(User.greet, override=True)
 def new_greet(self: User) -> str:
     return "New implementation"
 ```
 
 ### Q: Extension 的私有状态是实例级别的吗？
 
-是的，每个 Object 实例有独立的 Extension 视图和状态。
+是的，每个 Declaration 实例有独立的 Extension 视图和状态。

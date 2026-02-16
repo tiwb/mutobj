@@ -1,19 +1,19 @@
-# pyic API Reference
+# mutobj API Reference
 
 ## Overview
 
-pyic (Python Interface Class) 是一个支持声明与实现分离的 Python 类定义库。
+mutobj (Mutable Object) 是一个支持声明与实现分离的 Python 类定义库。
 
 ## Core API
 
-### `pyic.Object`
+### `mutobj.Declaration`
 
-所有 pyic 声明类的基类。
+所有 mutobj 声明类的基类。
 
 ```python
-import pyic
+import mutobj
 
-class User(pyic.Object):
+class User(mutobj.Declaration):
     name: str
     age: int
 
@@ -30,7 +30,7 @@ class User(pyic.Object):
 
 ---
 
-### `@pyic.impl(method, *, override=False)`
+### `@mutobj.impl(method, *, override=False)`
 
 方法实现装饰器，用于为声明的方法提供实现。
 
@@ -42,12 +42,12 @@ class User(pyic.Object):
 
 ```python
 # 普通方法实现
-@pyic.impl(User.greet)
+@mutobj.impl(User.greet)
 def greet(self: User) -> str:
     return f"Hello, {self.name}!"
 
 # 覆盖已有实现
-@pyic.impl(User.greet, override=True)
+@mutobj.impl(User.greet, override=True)
 def greet_v2(self: User) -> str:
     return f"Hi, {self.name}!"
 ```
@@ -55,7 +55,7 @@ def greet_v2(self: User) -> str:
 **Property 实现：**
 
 ```python
-class Product(pyic.Object):
+class Product(mutobj.Declaration):
     price: float
 
     @property
@@ -63,12 +63,12 @@ class Product(pyic.Object):
         ...
 
 # 实现 getter
-@pyic.impl(Product.display_price.getter)
+@mutobj.impl(Product.display_price.getter)
 def display_price(self: Product) -> str:
     return f"${self.price:.2f}"
 
 # 实现 setter（可选）
-@pyic.impl(Product.display_price.setter)
+@mutobj.impl(Product.display_price.setter)
 def set_display_price(self: Product, value: str) -> None:
     self.price = float(value.replace("$", ""))
 ```
@@ -76,7 +76,7 @@ def set_display_price(self: Product, value: str) -> None:
 **classmethod/staticmethod 实现：**
 
 ```python
-class Factory(pyic.Object):
+class Factory(mutobj.Declaration):
     value: int
 
     @classmethod
@@ -87,13 +87,13 @@ class Factory(pyic.Object):
     def validate(data: str) -> bool:
         ...
 
-@pyic.impl(Factory.create)
+@mutobj.impl(Factory.create)
 def create(cls, v: int) -> Factory:
     obj = cls()
     obj.value = v
     return obj
 
-@pyic.impl(Factory.validate)
+@mutobj.impl(Factory.validate)
 def validate(data: str) -> bool:
     return len(data) > 0
 ```
@@ -104,12 +104,12 @@ def validate(data: str) -> bool:
 
 ---
 
-### `pyic.Extension[T]`
+### `mutobj.Extension[T]`
 
-Extension 泛型基类，用于为 Object 子类提供扩展功能和私有状态。
+Extension 泛型基类，用于为 Declaration 子类提供扩展功能和私有状态。
 
 ```python
-class UserExt(pyic.Extension[User]):
+class UserExt(mutobj.Extension[User]):
     _counter: int = 0
 
     def __extension_init__(self):
@@ -134,7 +134,7 @@ class UserExt(pyic.Extension[User]):
 获取实例的 Extension 视图。
 
 **参数：**
-- `instance`: pyic.Object 的实例
+- `instance`: mutobj.Declaration 的实例
 
 **返回：**
 - 缓存的 Extension 视图对象
@@ -142,7 +142,7 @@ class UserExt(pyic.Extension[User]):
 **示例：**
 
 ```python
-@pyic.impl(User.greet)
+@mutobj.impl(User.greet)
 def greet(self: User) -> str:
     ext = UserExt.of(self)
     ext._counter += 1
@@ -157,13 +157,13 @@ def greet(self: User) -> str:
 
 ## Type Annotations
 
-pyic 完全支持类型检查工具（mypy、pyright）和 IDE 跳转。
+mutobj 完全支持类型检查工具（mypy、pyright）和 IDE 跳转。
 
 ```python
 # 声明文件 user.py
-import pyic
+import mutobj
 
-class User(pyic.Object):
+class User(mutobj.Declaration):
     name: str
     age: int
 
@@ -172,10 +172,10 @@ class User(pyic.Object):
         ...
 
 # 实现文件 user_impl.py
-import pyic
+import mutobj
 from .user import User
 
-@pyic.impl(User.greet)
+@mutobj.impl(User.greet)
 def greet(self: User) -> str:  # IDE 可识别 self 类型
     return f"Hello, {self.name}"  # IDE 可补全 name 属性
 ```
@@ -184,16 +184,16 @@ def greet(self: User) -> str:  # IDE 可识别 self 类型
 
 ## Inheritance
 
-pyic 完全支持类继承。
+mutobj 完全支持类继承。
 
 ```python
-class Animal(pyic.Object):
+class Animal(mutobj.Declaration):
     name: str
 
     def speak(self) -> str:
         ...
 
-@pyic.impl(Animal.speak)
+@mutobj.impl(Animal.speak)
 def animal_speak(self: Animal) -> str:
     return f"{self.name} makes a sound"
 
@@ -209,7 +209,7 @@ class Cat(Animal):
     def speak(self) -> str:
         ...
 
-@pyic.impl(Cat.speak)
+@mutobj.impl(Cat.speak)
 def cat_speak(self: Cat) -> str:
     return f"{self.name} meows"
 ```
@@ -223,7 +223,7 @@ def cat_speak(self: Cat) -> str:
 调用未实现的方法时抛出。
 
 ```python
-class Service(pyic.Object):
+class Service(mutobj.Declaration):
     def process(self) -> None:
         ...
 
@@ -238,11 +238,11 @@ s.process()  # NotImplementedError: Method 'process' is declared in Service but 
 
 ```python
 # 重复实现
-@pyic.impl(User.greet)
+@mutobj.impl(User.greet)
 def greet_v1(self: User) -> str:
     return "v1"
 
-@pyic.impl(User.greet)  # ValueError: Method 'greet' already implemented
+@mutobj.impl(User.greet)  # ValueError: Method 'greet' already implemented
 def greet_v2(self: User) -> str:
     return "v2"
 ```
@@ -257,6 +257,6 @@ def greet_v2(self: User) -> str:
 ## Version
 
 ```python
-import pyic
-print(pyic.__version__)  # "0.1.0"
+import mutobj
+print(mutobj.__version__)  # "0.1.0"
 ```

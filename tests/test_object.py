@@ -1,16 +1,16 @@
-"""测试 pyic.Object 基类"""
+"""测试 mutobj.Declaration 基类"""
 
 import pytest
-import pyic
-from pyic.core import _attribute_registry, _DECLARED_METHODS
+import mutobj
+from mutobj.core import _attribute_registry, _DECLARED_METHODS
 
 
-class TestObjectDeclaration:
-    """测试 Object 声明解析"""
+class TestDeclarationDeclaration:
+    """测试 Declaration 声明解析"""
 
     def test_simple_class_declaration(self):
         """测试简单类声明"""
-        class User(pyic.Object):
+        class User(mutobj.Declaration):
             name: str
             age: int
 
@@ -21,7 +21,7 @@ class TestObjectDeclaration:
 
     def test_attribute_access(self):
         """测试属性访问"""
-        class Person(pyic.Object):
+        class Person(mutobj.Declaration):
             name: str
 
         p = Person(name="Alice")
@@ -32,7 +32,7 @@ class TestObjectDeclaration:
 
     def test_attribute_not_set(self):
         """测试访问未设置的属性"""
-        class Item(pyic.Object):
+        class Item(mutobj.Declaration):
             value: int
 
         item = Item()
@@ -41,7 +41,7 @@ class TestObjectDeclaration:
 
     def test_method_declaration_recognized(self):
         """测试方法声明被识别"""
-        class Calculator(pyic.Object):
+        class Calculator(mutobj.Declaration):
             def add(self, a: int, b: int) -> int:
                 """Add two numbers"""
                 ...
@@ -52,7 +52,7 @@ class TestObjectDeclaration:
 
     def test_stub_method_with_pass(self):
         """测试使用 pass 的桩方法"""
-        class Service(pyic.Object):
+        class Service(mutobj.Declaration):
             def process(self) -> None:
                 pass
 
@@ -61,7 +61,7 @@ class TestObjectDeclaration:
 
     def test_unimplemented_method_raises(self):
         """测试调用未实现的方法抛出 NotImplementedError"""
-        class Greeter(pyic.Object):
+        class Greeter(mutobj.Declaration):
             def greet(self) -> str:
                 """Say hello"""
                 ...
@@ -74,12 +74,12 @@ class TestObjectDeclaration:
         assert "not implemented" in str(exc_info.value)
 
 
-class TestObjectInit:
-    """测试 Object 初始化"""
+class TestDeclarationInit:
+    """测试 Declaration 初始化"""
 
     def test_kwargs_initialization(self):
         """测试通过关键字参数初始化"""
-        class Product(pyic.Object):
+        class Product(mutobj.Declaration):
             name: str
             price: float
 
@@ -89,7 +89,7 @@ class TestObjectInit:
 
     def test_partial_kwargs(self):
         """测试部分关键字参数初始化"""
-        class Config(pyic.Object):
+        class Config(mutobj.Declaration):
             host: str
             port: int
 

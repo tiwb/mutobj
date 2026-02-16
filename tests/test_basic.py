@@ -3,15 +3,15 @@
 import pytest
 
 
-def test_import_pyic():
-    """测试 pyic 包可以导入"""
-    import pyic
-    assert hasattr(pyic, "Object")
-    assert hasattr(pyic, "Extension")
-    assert hasattr(pyic, "impl")
+def test_import_mutobj():
+    """测试 mutobj 包可以导入"""
+    import mutobj
+    assert hasattr(mutobj, "Declaration")
+    assert hasattr(mutobj, "Extension")
+    assert hasattr(mutobj, "impl")
 
 
 def test_version():
     """测试版本号"""
-    import pyic
-    assert pyic.__version__ == "0.2.0"
+    import mutobj
+    assert mutobj.__version__ == "0.2.0"

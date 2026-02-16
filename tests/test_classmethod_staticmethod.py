@@ -1,8 +1,8 @@
-"""测试 pyic classmethod/staticmethod 支持"""
+"""测试 mutobj classmethod/staticmethod 支持"""
 
 import pytest
-import pyic
-from pyic.core import _DECLARED_CLASSMETHODS, _DECLARED_STATICMETHODS
+import mutobj
+from mutobj.core import _DECLARED_CLASSMETHODS, _DECLARED_STATICMETHODS
 
 
 class TestClassmethodDeclaration:
@@ -10,7 +10,7 @@ class TestClassmethodDeclaration:
 
     def test_classmethod_declaration_recognized(self):
         """测试 classmethod 声明被识别"""
-        class Factory(pyic.Object):
+        class Factory(mutobj.Declaration):
             @classmethod
             def create(cls) -> "Factory":
                 """创建实例"""
@@ -21,7 +21,7 @@ class TestClassmethodDeclaration:
 
     def test_unimplemented_classmethod_raises(self):
         """测试调用未实现的 classmethod 抛出 NotImplementedError"""
-        class Builder(pyic.Object):
+        class Builder(mutobj.Declaration):
             @classmethod
             def build(cls) -> "Builder":
                 """构建实例"""
@@ -39,7 +39,7 @@ class TestClassmethodImplementation:
 
     def test_classmethod_implementation(self):
         """测试实现 classmethod"""
-        class Counter(pyic.Object):
+        class Counter(mutobj.Declaration):
             value: int
 
             @classmethod
@@ -47,7 +47,7 @@ class TestClassmethodImplementation:
                 """从值创建"""
                 ...
 
-        @pyic.impl(Counter.from_value)
+        @mutobj.impl(Counter.from_value)
         def from_value(cls, val: int) -> Counter:
             instance = cls()
             instance.value = val
@@ -58,7 +58,7 @@ class TestClassmethodImplementation:
 
     def test_classmethod_with_inheritance(self):
         """测试 classmethod 在子类中的行为"""
-        class Base(pyic.Object):
+        class Base(mutobj.Declaration):
             name: str
 
             @classmethod
@@ -66,7 +66,7 @@ class TestClassmethodImplementation:
                 """使用名称创建"""
                 ...
 
-        @pyic.impl(Base.create_with_name)
+        @mutobj.impl(Base.create_with_name)
         def create_with_name(cls, name: str) -> Base:
             instance = cls()
             instance.name = name
@@ -82,7 +82,7 @@ class TestStaticmethodDeclaration:
 
     def test_staticmethod_declaration_recognized(self):
         """测试 staticmethod 声明被识别"""
-        class Utils(pyic.Object):
+        class Utils(mutobj.Declaration):
             @staticmethod
             def helper(x: int) -> int:
                 """辅助函数"""
@@ -93,7 +93,7 @@ class TestStaticmethodDeclaration:
 
     def test_unimplemented_staticmethod_raises(self):
         """测试调用未实现的 staticmethod 抛出 NotImplementedError"""
-        class Calculator(pyic.Object):
+        class Calculator(mutobj.Declaration):
             @staticmethod
             def compute(x: int, y: int) -> int:
                 """计算"""
@@ -111,13 +111,13 @@ class TestStaticmethodImplementation:
 
     def test_staticmethod_implementation(self):
         """测试实现 staticmethod"""
-        class Math(pyic.Object):
+        class Math(mutobj.Declaration):
             @staticmethod
             def add(a: int, b: int) -> int:
                 """加法"""
                 ...
 
-        @pyic.impl(Math.add)
+        @mutobj.impl(Math.add)
         def add(a: int, b: int) -> int:
             return a + b
 
@@ -125,13 +125,13 @@ class TestStaticmethodImplementation:
 
     def test_staticmethod_no_self_or_cls(self):
         """测试 staticmethod 不接收 self 或 cls"""
-        class Validator(pyic.Object):
+        class Validator(mutobj.Declaration):
             @staticmethod
             def is_valid(value: str) -> bool:
                 """验证"""
                 ...
 
-        @pyic.impl(Validator.is_valid)
+        @mutobj.impl(Validator.is_valid)
         def is_valid(value: str) -> bool:
             return len(value) > 0
 
@@ -140,13 +140,13 @@ class TestStaticmethodImplementation:
 
     def test_staticmethod_callable_on_instance(self):
         """测试 staticmethod 可以在实例上调用"""
-        class Parser(pyic.Object):
+        class Parser(mutobj.Declaration):
             @staticmethod
             def parse(text: str) -> list:
                 """解析"""
                 ...
 
-        @pyic.impl(Parser.parse)
+        @mutobj.impl(Parser.parse)
         def parse(text: str) -> list:
             return text.split(",")
 
@@ -160,7 +160,7 @@ class TestMixedMethods:
 
     def test_class_with_all_method_types(self):
         """测试同时包含普通方法、classmethod、staticmethod"""
-        class Service(pyic.Object):
+        class Service(mutobj.Declaration):
             name: str
 
             def process(self) -> str:
@@ -177,17 +177,17 @@ class TestMixedMethods:
                 """验证"""
                 ...
 
-        @pyic.impl(Service.process)
+        @mutobj.impl(Service.process)
         def process(self: Service) -> str:
             return f"Processing {self.name}"
 
-        @pyic.impl(Service.create)
+        @mutobj.impl(Service.create)
         def create(cls) -> Service:
             s = cls()
             s.name = "default"
             return s
 
-        @pyic.impl(Service.validate)
+        @mutobj.impl(Service.validate)
         def validate(data: str) -> bool:
             return data.startswith("valid")
 

@@ -17,7 +17,7 @@
 
 | 项目 | 决策 |
 |------|------|
-| 库名称 | `pyic`（Python Interface Class） |
+| 库名称 | `mutobj`（Mutable Object Declaration） |
 | Python 版本 | 3.11+ 基线，支持 3.14+ 新特性 |
 | C/C++ 转换 | 后续迭代，MVP 不包含，但设计需预留扩展性 |
 | 成员变量存储 | 需抽象存储层，与接口设计解耦，便于未来优化 |
@@ -25,7 +25,7 @@
 | 实例化方式 | 自动发现（import 时自动注册实现） |
 | 实现发现机制 | 显式 import |
 | 公开属性访问 | 直接 `self.name`，内部通过 descriptor 拦截 |
-| 重复实现处理 | 默认报错，`@pyic.impl(..., override=True)` 允许覆盖 |
+| 重复实现处理 | 默认报错，`@mutobj.impl(..., override=True)` 允许覆盖 |
 | 继承支持 | 继承 + 可覆盖 |
 | `__init__` 位置 | 不限制，但建议在实现文件中定义 |
 | 声明语法 | docstring + `...`（推荐） |
@@ -33,14 +33,14 @@
 | property 支持 | MVP 支持，使用 `.getter`/`.setter` 显式语法 |
 | classmethod/staticmethod | MVP 支持 |
 | 模块结构 | 不限制，文档提供最佳实践 |
-| Extension 语法 | `class Ext(pyic.Extension[User])` 泛型基类 |
+| Extension 语法 | `class Ext(mutobj.Extension[User])` 泛型基类 |
 | Extension 私有函数可见性 | Python 默认行为（`_` 命名约定） |
 | Extension 中 self | 指向 Extension 视图 |
 | Extension 初始化 | 默认值 + `__extension_init__` 钩子 |
 | Extension.of() 缓存 | 是，缓存视图对象 |
 | 外部调用私有方法 | 允许（Python 惯例） |
 | 未绑定的 Extension | 允许 |
-| Native 类型标记 | 类级别 `@pyic.native` + 属性级别类型注解 |
+| Native 类型标记 | 类级别 `@mutobj.native` + 属性级别类型注解 |
 | Native 基本类型映射 | `int`→`int64_t`, `float`→`double`, `str`→`const char*` |
 | 类型检查策略 | native 模式严格，非 native 模式宽松 |
 | 内存管理 | v2.0 设计，MVP 使用 Python 原生 GC |
@@ -49,9 +49,9 @@
 
 **声明文件 user.py**：
 ```python
-import pyic
+import mutobj
 
-class User(pyic.Object):
+class User(mutobj.Declaration):
     name: str
     age: int
 
@@ -71,10 +71,10 @@ class User(pyic.Object):
 
 **实现文件 user_impl.py**：
 ```python
-import pyic
+import mutobj
 from .user import User
 
-class UserExt(pyic.Extension[User]):
+class UserExt(mutobj.Extension[User]):
     _counter: int = 0
 
     def _format_greeting(self) -> str:
@@ -84,13 +84,13 @@ class UserExt(pyic.Extension[User]):
         """可选：Extension 初始化钩子"""
         self._counter = 0
 
-@pyic.impl(User.greet)
+@mutobj.impl(User.greet)
 def greet(self: User) -> str:
     ext = UserExt.of(self)
     ext._counter += 1
     return ext._format_greeting()
 
-@pyic.impl(User.display_name.getter)
+@mutobj.impl(User.display_name.getter)
 def display_name(self: User) -> str:
     return f"[{self.name}]"
 ```
@@ -100,11 +100,11 @@ def display_name(self: User) -> str:
 ### 2.3 Native 类型设计（v2.0 预留）
 
 ```python
-import pyic
-from pyic.native import Int32, Float32, WideString
+import mutobj
+from mutobj.native import Int32, Float32, WideString
 
-@pyic.native  # 标记为纯 C 类
-class User(pyic.Object):
+@mutobj.native  # 标记为纯 C 类
+class User(mutobj.Declaration):
     age: int              # 默认 int64_t
     small_count: Int32    # 显式 int32_t
     ratio: float          # 默认 double
@@ -115,7 +115,7 @@ class User(pyic.Object):
     def greet(self) -> str: ...
 ```
 
-**默认类型映射（在 `@pyic.native` 类下）**：
+**默认类型映射（在 `@mutobj.native` 类下）**：
 
 | Python 类型 | Native C 类型 | 说明 |
 |-------------|---------------|------|
@@ -132,18 +132,18 @@ class User(pyic.Object):
 
 ```
 ┌─────────────────────────────────────────────────────────────┐
-│                      pyic 架构                               │
+│                      mutobj 架构                              │
 ├─────────────────────────────────────────────────────────────┤
 │                                                              │
 │  声明文件 (.py)              实现文件 (.py)                   │
 │  ┌──────────────────┐      ┌──────────────────────────┐    │
 │  │ class User       │      │ class UserExt            │    │
-│  │   (pyic.Object)  │◄─────│   (Extension[User])      │    │
+│  │   (mutobj.Declaration)│◄─────│   (Extension[User])      │    │
 │  │                  │      │   _counter: int          │    │
 │  │ - name: str      │      │   _format_greeting()     │    │
 │  │ - age: int       │      │                          │    │
 │  │ + greet()        │      ├──────────────────────────┤    │
-│  │ + display_name   │      │ @pyic.impl(User.greet)   │    │
+│  │ + display_name   │      │ @mutobj.impl(User.greet) │    │
 │  └──────────────────┘      │ def greet(self): ...     │    │
 │                             └──────────────────────────┘    │
 │                                                              │
@@ -160,7 +160,7 @@ class User(pyic.Object):
 │  │  - 声明 → C struct + vtable                           │  │
 │  │  - 实现 → C 函数                                       │  │
 │  │  - Extension → 扩展 struct                             │  │
-│  │  - @pyic.native → native 类型存储                      │  │
+│  │  - @mutobj.native → native 类型存储                    │  │
 │  └──────────────────────────────────────────────────────┘  │
 │                                                              │
 └─────────────────────────────────────────────────────────────┘
@@ -170,13 +170,13 @@ class User(pyic.Object):
 
 | API | 说明 |
 |-----|------|
-| `pyic.Object` | 声明类的基类 |
-| `pyic.Extension[T]` | Extension 泛型基类 |
-| `@pyic.impl(method)` | 方法实现装饰器 |
-| `@pyic.impl(method, override=True)` | 覆盖实现 |
+| `mutobj.Declaration` | 声明类的基类 |
+| `mutobj.Extension[T]` | Extension 泛型基类 |
+| `@mutobj.impl(method)` | 方法实现装饰器 |
+| `@mutobj.impl(method, override=True)` | 覆盖实现 |
 | `Extension.of(instance)` | 获取实例的 Extension 视图 |
 | `__extension_init__(self)` | Extension 初始化钩子 |
-| `@pyic.native` | 标记为 native C 类（v2.0） |
+| `@mutobj.native` | 标记为 native C 类（v2.0） |
 
 ### 3.3 设计原则
 
@@ -191,19 +191,19 @@ class User(pyic.Object):
 ### 阶段一：核心框架 [✅ 已完成]
 
 - [x] **Task 1.1**: 项目初始化
-  - [x] 创建 pyic 包结构
+  - [x] 创建 mutobj 包结构
   - [x] 设置 pyproject.toml
   - [x] 配置测试框架（pytest）
   - 状态：✅ 已完成
 
-- [x] **Task 1.2**: pyic.Object 基类
+- [x] **Task 1.2**: mutobj.Declaration 基类
   - [x] 实现 metaclass
   - [x] 属性声明解析
   - [x] 方法声明解析（识别空方法）
   - [x] 单元测试 (8个测试通过)
   - 状态：✅ 已完成
 
-- [x] **Task 1.3**: @pyic.impl 装饰器
+- [x] **Task 1.3**: @mutobj.impl 装饰器
   - [x] 方法注册机制
   - [x] 重复实现检测
   - [x] override 参数支持
@@ -212,7 +212,7 @@ class User(pyic.Object):
 
 ### 阶段二：Extension 机制 [✅ 已完成]
 
-- [x] **Task 2.1**: pyic.Extension 泛型基类
+- [x] **Task 2.1**: mutobj.Extension 泛型基类
   - [x] `__class_getitem__` 实现
   - [x] 目标类绑定
   - [x] 类型检查支持
@@ -278,7 +278,7 @@ class User(pyic.Object):
 
 **所有任务完成度：100%** (12/12任务)
 **单元测试覆盖：50个测试全部通过**
-**构建产物：pyic-0.2.0.tar.gz, pyic-0.2.0-py3-none-any.whl**
+**构建产物：mutobj-0.2.0.tar.gz, mutobj-0.2.0-py3-none-any.whl**
 
 ---
 
@@ -286,8 +286,8 @@ class User(pyic.Object):
 
 ### 单元测试
 
-- [x] pyic.Object 基类测试 (8个测试通过)
-- [x] @pyic.impl 装饰器测试 (6个测试通过)
+- [x] mutobj.Declaration 基类测试 (8个测试通过)
+- [x] @mutobj.impl 装饰器测试 (6个测试通过)
 - [x] Extension 机制测试 (8个测试通过)
 - [x] Property 支持测试 (7个测试通过)
 - [x] classmethod/staticmethod 测试 (10个测试通过)
@@ -308,7 +308,7 @@ class User(pyic.Object):
 | v0.1.0 (MVP) | 核心框架 + Extension + Property |
 | v0.2.0 | classmethod/staticmethod + 继承 |
 | v1.0.0 | 完整功能 + 文档 + PyPI 发布 |
-| v2.0.0 | @pyic.native + C++ 代码生成 |
+| v2.0.0 | @mutobj.native + C++ 代码生成 |
 
 ---
 
@@ -317,7 +317,7 @@ class User(pyic.Object):
 **完成情况**：
 - 所有 12 个任务全部完成
 - 50 个单元测试全部通过
-- 包已构建：pyic-0.2.0.tar.gz, pyic-0.2.0-py3-none-any.whl
+- 包已构建：mutobj-0.2.0.tar.gz, mutobj-0.2.0-py3-none-any.whl
 
 **发布命令**：
 ```bash

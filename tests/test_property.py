@@ -1,7 +1,7 @@
-"""测试 pyic Property 支持"""
+"""测试 mutobj Property 支持"""
 
 import pytest
-import pyic
+import mutobj
 
 
 class TestPropertyDeclaration:
@@ -9,7 +9,7 @@ class TestPropertyDeclaration:
 
     def test_property_declaration(self):
         """测试 property 声明被识别"""
-        class User(pyic.Object):
+        class User(mutobj.Declaration):
             name: str
 
             @property
@@ -18,13 +18,13 @@ class TestPropertyDeclaration:
                 ...
 
         # 验证 property 被识别为声明
-        from pyic.core import _DECLARED_PROPERTIES
+        from mutobj.core import _DECLARED_PROPERTIES
         declared = getattr(User, _DECLARED_PROPERTIES, set())
         assert "display_name" in declared
 
     def test_unimplemented_property_raises(self):
         """测试访问未实现的 property 抛出 NotImplementedError"""
-        class Config(pyic.Object):
+        class Config(mutobj.Declaration):
             @property
             def value(self) -> int:
                 """配置值"""
@@ -43,7 +43,7 @@ class TestPropertyImplementation:
 
     def test_property_getter_implementation(self):
         """测试实现 property getter"""
-        class Product(pyic.Object):
+        class Product(mutobj.Declaration):
             name: str
             price: float
 
@@ -52,7 +52,7 @@ class TestPropertyImplementation:
                 """格式化价格"""
                 ...
 
-        @pyic.impl(Product.display_price.getter)
+        @mutobj.impl(Product.display_price.getter)
         def display_price(self: Product) -> str:
             return f"${self.price:.2f}"
 
@@ -61,7 +61,7 @@ class TestPropertyImplementation:
 
     def test_property_setter_implementation(self):
         """测试实现 property setter"""
-        class Counter(pyic.Object):
+        class Counter(mutobj.Declaration):
             _value: int
 
             @property
@@ -69,11 +69,11 @@ class TestPropertyImplementation:
                 """计数值"""
                 ...
 
-        @pyic.impl(Counter.value.getter)
+        @mutobj.impl(Counter.value.getter)
         def value_getter(self: Counter) -> int:
             return self._value
 
-        @pyic.impl(Counter.value.setter)
+        @mutobj.impl(Counter.value.setter)
         def value_setter(self: Counter, val: int) -> None:
             if val < 0:
                 raise ValueError("Value must be non-negative")
@@ -90,7 +90,7 @@ class TestPropertyImplementation:
 
     def test_readonly_property(self):
         """测试只读 property（无 setter）"""
-        class ReadOnly(pyic.Object):
+        class ReadOnly(mutobj.Declaration):
             _data: str
 
             @property
@@ -98,7 +98,7 @@ class TestPropertyImplementation:
                 """只读数据"""
                 ...
 
-        @pyic.impl(ReadOnly.data.getter)
+        @mutobj.impl(ReadOnly.data.getter)
         def data_getter(self: ReadOnly) -> str:
             return self._data
 
@@ -117,7 +117,7 @@ class TestPropertyOverride:
 
     def test_property_getter_override(self):
         """测试覆盖 property getter"""
-        class Formatter(pyic.Object):
+        class Formatter(mutobj.Declaration):
             value: str
 
             @property
@@ -125,14 +125,14 @@ class TestPropertyOverride:
                 """格式化值"""
                 ...
 
-        @pyic.impl(Formatter.formatted.getter)
+        @mutobj.impl(Formatter.formatted.getter)
         def formatted_v1(self: Formatter) -> str:
             return f"[{self.value}]"
 
         f = Formatter(value="test")
         assert f.formatted == "[test]"
 
-        @pyic.impl(Formatter.formatted.getter, override=True)
+        @mutobj.impl(Formatter.formatted.getter, override=True)
         def formatted_v2(self: Formatter) -> str:
             return f"<{self.value}>"
 
@@ -140,17 +140,17 @@ class TestPropertyOverride:
 
     def test_duplicate_property_getter_raises(self):
         """测试重复实现 property getter 抛出错误"""
-        class Wrapper(pyic.Object):
+        class Wrapper(mutobj.Declaration):
             @property
             def wrapped(self) -> str:
                 ...
 
-        @pyic.impl(Wrapper.wrapped.getter)
+        @mutobj.impl(Wrapper.wrapped.getter)
         def wrapped_v1(self: Wrapper) -> str:
             return "v1"
 
         with pytest.raises(ValueError) as exc_info:
-            @pyic.impl(Wrapper.wrapped.getter)
+            @mutobj.impl(Wrapper.wrapped.getter)
             def wrapped_v2(self: Wrapper) -> str:
                 return "v2"
 

@@ -1,8 +1,8 @@
-"""测试 @pyic.impl 装饰器"""
+"""测试 @mutobj.impl 装饰器"""
 
 import pytest
-import pyic
-from pyic.core import _method_registry
+import mutobj
+from mutobj.core import _method_registry
 
 
 class TestImplDecorator:
@@ -10,14 +10,14 @@ class TestImplDecorator:
 
     def test_basic_implementation(self):
         """测试基本方法实现"""
-        class Greeter(pyic.Object):
+        class Greeter(mutobj.Declaration):
             name: str
 
             def greet(self) -> str:
                 """Say hello"""
                 ...
 
-        @pyic.impl(Greeter.greet)
+        @mutobj.impl(Greeter.greet)
         def greet(self: Greeter) -> str:
             return f"Hello, {self.name}!"
 
@@ -26,11 +26,11 @@ class TestImplDecorator:
 
     def test_implementation_registered(self):
         """测试实现被注册"""
-        class Counter(pyic.Object):
+        class Counter(mutobj.Declaration):
             def count(self) -> int:
                 ...
 
-        @pyic.impl(Counter.count)
+        @mutobj.impl(Counter.count)
         def count(self: Counter) -> int:
             return 42
 
@@ -39,16 +39,16 @@ class TestImplDecorator:
 
     def test_duplicate_implementation_raises(self):
         """测试重复实现抛出错误"""
-        class Adder(pyic.Object):
+        class Adder(mutobj.Declaration):
             def add(self, a: int, b: int) -> int:
                 ...
 
-        @pyic.impl(Adder.add)
+        @mutobj.impl(Adder.add)
         def add_v1(self: Adder, a: int, b: int) -> int:
             return a + b
 
         with pytest.raises(ValueError) as exc_info:
-            @pyic.impl(Adder.add)
+            @mutobj.impl(Adder.add)
             def add_v2(self: Adder, a: int, b: int) -> int:
                 return a + b + 1
 
@@ -56,18 +56,18 @@ class TestImplDecorator:
 
     def test_override_implementation(self):
         """测试使用 override=True 覆盖实现"""
-        class Multiplier(pyic.Object):
+        class Multiplier(mutobj.Declaration):
             def multiply(self, a: int, b: int) -> int:
                 ...
 
-        @pyic.impl(Multiplier.multiply)
+        @mutobj.impl(Multiplier.multiply)
         def multiply_v1(self: Multiplier, a: int, b: int) -> int:
             return a * b
 
         m = Multiplier()
         assert m.multiply(3, 4) == 12
 
-        @pyic.impl(Multiplier.multiply, override=True)
+        @mutobj.impl(Multiplier.multiply, override=True)
         def multiply_v2(self: Multiplier, a: int, b: int) -> int:
             return a * b * 2
 
@@ -75,13 +75,13 @@ class TestImplDecorator:
 
     def test_impl_with_self_attributes(self):
         """测试实现中访问 self 属性"""
-        class Calculator(pyic.Object):
+        class Calculator(mutobj.Declaration):
             base: int
 
             def compute(self, x: int) -> int:
                 ...
 
-        @pyic.impl(Calculator.compute)
+        @mutobj.impl(Calculator.compute)
         def compute(self: Calculator, x: int) -> int:
             return self.base + x
 
@@ -94,12 +94,12 @@ class TestImplErrors:
 
     def test_impl_non_declared_method(self):
         """测试实现非声明方法抛出错误"""
-        class Widget(pyic.Object):
+        class Widget(mutobj.Declaration):
             def declared_method(self) -> None:
                 ...
 
         # 先实现声明的方法
-        @pyic.impl(Widget.declared_method)
+        @mutobj.impl(Widget.declared_method)
         def declared_impl(self: Widget) -> None:
             pass
 
