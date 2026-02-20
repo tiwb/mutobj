@@ -24,6 +24,7 @@ class User(mutobj.Declaration):
 
 **特性：**
 - 自动为类型注解的属性创建描述符
+- 支持属性默认值（不可变类型直接赋值，可变类型使用 `field()`）
 - 识别桩方法（只包含 `...` 或 `pass` 的方法）
 - 支持 `@property`、`@classmethod`、`@staticmethod` 声明
 - 支持通过关键字参数初始化：`User(name="Alice", age=30)`
@@ -251,6 +252,38 @@ def greet_v2(self: User) -> str:
 
 - 访问未设置的属性
 - 设置只读 property
+
+---
+
+### `mutobj.field(*, default=MISSING, default_factory=None)`
+
+声明属性的默认值，用于可变类型或需要工厂函数的场景。
+
+**参数：**
+- `default`: 不可变默认值（与 `default_factory` 互斥）
+- `default_factory`: 可变默认值的工厂函数，每次实例化时调用（与 `default` 互斥）
+
+**示例：**
+
+```python
+from mutobj import field
+
+class Config(mutobj.Declaration):
+    # 不可变默认值——直接赋值即可，不需要 field()
+    port: int = 8080
+
+    # 可变默认值——必须使用 field(default_factory=...)
+    tags: list[str] = field(default_factory=list)
+    headers: dict[str, str] = field(default_factory=dict)
+
+    # 自定义工厂函数
+    data: list[int] = field(default_factory=lambda: [1, 2, 3])
+```
+
+**异常：**
+- `TypeError`: 同时传入 `default` 和 `default_factory`
+
+**注意：** 可变类型（`list`、`dict`、`set`、`bytearray`）不能直接赋值为属性默认值，否则会在类定义时抛出 `TypeError`。
 
 ---
 

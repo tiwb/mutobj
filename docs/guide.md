@@ -32,6 +32,9 @@ class User(mutobj.Declaration):
     email: str
     age: int
 
+    # 属性默认值
+    active: bool = True
+
     # 方法声明（桩方法）
     def greet(self) -> str:
         """返回问候语"""
@@ -328,6 +331,67 @@ __all__ = ["User", "Product"]
 3. **使用 Extension 管理私有状态**：避免在声明类中添加私有属性
 4. **显式导入实现**：在包的 `__init__.py` 中导入实现文件
 5. **类型注解**：为 `self` 参数添加类型注解以获得 IDE 支持
+
+## 属性默认值
+
+Declaration 属性支持 dataclass 风格的默认值语法：
+
+```python
+import mutobj
+from mutobj import field
+
+class Config(mutobj.Declaration):
+    # 无默认值——构造时必须传入
+    host: str
+
+    # 不可变默认值——直接赋值
+    port: int = 8080
+    debug: bool = False
+    greeting: str = "hello"
+
+    # Optional 默认 None
+    api_key: str | None = None
+
+    # 可变类型默认值——使用 field(default_factory=...)
+    tags: list[str] = field(default_factory=list)
+    headers: dict[str, str] = field(default_factory=dict)
+```
+
+```python
+# 有默认值的属性可以省略
+config = Config(host="localhost")
+assert config.port == 8080
+assert config.tags == []      # 每个实例独立的 list
+assert config.api_key is None
+
+# 也可以覆盖默认值
+config2 = Config(host="0.0.0.0", port=9090, tags=["prod"])
+```
+
+**注意**：可变类型（`list`、`dict`、`set`）不能直接赋值，必须使用 `field(default_factory=...)`：
+
+```python
+# 错误——会抛出 TypeError
+class Bad(mutobj.Declaration):
+    items: list = []  # TypeError!
+
+# 正确
+class Good(mutobj.Declaration):
+    items: list = field(default_factory=list)
+```
+
+继承时，子类可以覆盖父类的默认值：
+
+```python
+class Animal(mutobj.Declaration):
+    sound: str = "..."
+
+class Dog(Animal):
+    sound: str = "woof"  # 覆盖父类默认值
+
+dog = Dog()
+assert dog.sound == "woof"
+```
 
 ## 常见问题
 

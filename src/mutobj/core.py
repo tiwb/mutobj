@@ -9,7 +9,7 @@ from __future__ import annotations
 import weakref
 from typing import TypeVar, Generic, Callable, Any, get_type_hints, TYPE_CHECKING
 
-__all__ = ["Declaration", "Extension", "impl", "unregister_module_impls"]
+__all__ = ["Declaration", "Extension", "impl", "unregister_module_impls", "field"]
 
 # 类型变量
 T = TypeVar("T", bound="Declaration")
@@ -44,6 +44,61 @@ _DECLARED_CLASSMETHODS: str = "__mutobj_declared_classmethods__"
 
 # 声明 staticmethod 标记
 _DECLARED_STATICMETHODS: str = "__mutobj_declared_staticmethods__"
+
+# 可变类型黑名单（直接赋值时报错，引导使用 field(default_factory=...)）
+_MUTABLE_TYPES = (list, dict, set, bytearray)
+
+
+class _MissingSentinel:
+    """默认值缺失哨兵，区分"无默认值"和"默认值为 None" """
+    _instance: _MissingSentinel | None = None
+
+    def __new__(cls) -> _MissingSentinel:
+        if cls._instance is None:
+            cls._instance = super().__new__(cls)
+        return cls._instance
+
+    def __repr__(self) -> str:
+        return "MISSING"
+
+    def __bool__(self) -> bool:
+        return False
+
+
+_MISSING: Any = _MissingSentinel()
+
+
+class Field:
+    """属性默认值描述，由 field() 创建"""
+
+    __slots__ = ("default", "default_factory")
+
+    def __init__(
+        self,
+        default: Any = _MISSING,
+        default_factory: Callable[[], Any] | None = None,
+    ) -> None:
+        if default is not _MISSING and default_factory is not None:
+            raise TypeError("不能同时指定 default 和 default_factory")
+        self.default = default
+        self.default_factory = default_factory
+
+
+def field(
+    *,
+    default: Any = _MISSING,
+    default_factory: Callable[[], Any] | None = None,
+) -> Any:
+    """声明属性的默认值
+
+    Args:
+        default: 不可变默认值
+        default_factory: 可变默认值的工厂函数，每次实例化时调用
+
+    Returns:
+        Field 哨兵对象（DeclarationMeta 会识别并提取）
+    """
+    return Field(default=default, default_factory=default_factory)
 
 
 def _make_stub_method(name: str, cls: type) -> Callable[..., Any]:
@@ -176,10 +231,23 @@ def _register_to_chain(
 class AttributeDescriptor:
     """属性描述符，用于拦截属性访问"""
 
-    def __init__(self, name: str, annotation: Any):
+    def __init__(
+        self,
+        name: str,
+        annotation: Any,
+        default: Any = _MISSING,
+        default_factory: Callable[[], Any] | None = None,
+    ):
         self.name = name
         self.annotation = annotation
         self.storage_name = f"_mutobj_attr_{name}"
+        self.default = default
+        self.default_factory = default_factory
+
+    @property
+    def has_default(self) -> bool:
+        """是否有默认值"""
+        return self.default is not _MISSING or self.default_factory is not None
 
     def __get__(self, obj: Any, objtype: type | None = None) -> Any:
         if obj is None:
@@ -393,13 +461,35 @@ class DeclarationMeta(type):
         # 处理属性声明
         attr_registry: dict[str, Any] = {}
         for attr_name, attr_type in annotations.items():
-            if attr_name in namespace and not isinstance(namespace[attr_name], AttributeDescriptor):
-                if callable(namespace[attr_name]) or isinstance(namespace[attr_name], property):
-                    continue
+            value = namespace.get(attr_name)
 
-            if not hasattr(cls, attr_name) or not isinstance(getattr(cls, attr_name), AttributeDescriptor):
+            if isinstance(value, Field):
+                # field() 声明
+                descriptor = AttributeDescriptor(
+                    attr_name, attr_type,
+                    default=value.default,
+                    default_factory=value.default_factory,
+                )
+            elif attr_name in namespace and not isinstance(value, AttributeDescriptor):
+                if callable(value) or isinstance(value, property):
+                    continue
+                # 检测可变类型直接赋值
+                if isinstance(value, _MUTABLE_TYPES):
+                    raise TypeError(
+                        f"Declaration '{name}' 的属性 '{attr_name}' 使用了可变默认值 "
+                        f"{type(value).__name__}。"
+                        f"请使用 field(default_factory={type(value).__name__}) 代替。"
+                    )
+                # 不可变默认值
+                descriptor = AttributeDescriptor(attr_name, attr_type, default=value)
+            elif not hasattr(cls, attr_name) or not isinstance(getattr(cls, attr_name), AttributeDescriptor):
+                # 无默认值
                 descriptor = AttributeDescriptor(attr_name, attr_type)
-                setattr(cls, attr_name, descriptor)
+            else:
+                attr_registry[attr_name] = attr_type
+                continue
+
+            setattr(cls, attr_name, descriptor)
             attr_registry[attr_name] = attr_type
 
         _attribute_registry[cls] = attr_registry
@@ -490,13 +580,26 @@ class Declaration(metaclass=DeclarationMeta):
     """
 
     def __init__(self, **kwargs: Any) -> None:
-        """初始化对象，支持通过关键字参数设置属性"""
-        # 遍历 MRO 中的所有类，收集所有属性
+        """初始化对象，支持通过关键字参数设置属性，自动应用默认值"""
+        # 遍历 MRO 中的所有类，收集所有属性（最派生类优先）
+        applied: set[str] = set()
         for klass in type(self).__mro__:
             if klass in _attribute_registry:
                 for attr_name in _attribute_registry[klass]:
+                    if attr_name in applied:
+                        continue
                     if attr_name in kwargs:
                         setattr(self, attr_name, kwargs[attr_name])
+                        applied.add(attr_name)
+                    else:
+                        # 查找描述符上的默认值
+                        desc = klass.__dict__.get(attr_name)
+                        if isinstance(desc, AttributeDescriptor) and desc.has_default:
+                            if desc.default_factory is not None:
+                                setattr(self, attr_name, desc.default_factory())
+                            else:
+                                setattr(self, attr_name, desc.default)
+                            applied.add(attr_name)
 
 
 # Extension 视图缓存
