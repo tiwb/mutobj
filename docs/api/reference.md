@@ -25,19 +25,20 @@ class User(mutobj.Declaration):
 **特性：**
 - 自动为类型注解的属性创建描述符
 - 支持属性默认值（不可变类型直接赋值，可变类型使用 `field()`）
-- 识别桩方法（只包含 `...` 或 `pass` 的方法）
+- 所有公开方法的原始函数保存为默认实现（`...` / `pass` / 有代码均支持）
 - 支持 `@property`、`@classmethod`、`@staticmethod` 声明
 - 支持通过关键字参数初始化：`User(name="Alice", age=30)`
 
 ---
 
-### `@mutobj.impl(method, *, override=False)`
+### `@mutobj.impl(method)`
 
 方法实现装饰器，用于为声明的方法提供实现。
 
+多个模块可以为同一方法注册 `@impl`，形成覆盖链。按注册顺序排列，最后注册的为活跃实现。
+
 **参数：**
 - `method`: 要实现的方法（如 `User.greet`）
-- `override`: 是否允许覆盖已有实现，默认 `False`
 
 **示例：**
 
@@ -46,11 +47,6 @@ class User(mutobj.Declaration):
 @mutobj.impl(User.greet)
 def greet(self: User) -> str:
     return f"Hello, {self.name}!"
-
-# 覆盖已有实现
-@mutobj.impl(User.greet, override=True)
-def greet_v2(self: User) -> str:
-    return f"Hi, {self.name}!"
 ```
 
 **Property 实现：**
@@ -100,8 +96,41 @@ def validate(data: str) -> bool:
 ```
 
 **异常：**
-- `ValueError`: 方法未声明或已有实现且 `override=False`
+- `ValueError`: 方法未声明
 - `TypeError`: 参数类型错误
+
+**覆盖链行为：**
+- 多个模块可为同一方法注册 `@impl`，后注册者成为活跃实现
+- 同模块重复注册（reload 场景）就地替换，链中位置不变
+- 使用 `unregister_module_impls()` 卸载指定模块的实现
+
+---
+
+### `mutobj.unregister_module_impls(module_name)`
+
+移除指定模块注册的所有 `@impl`，恢复覆盖链上一层实现。
+
+**参数：**
+- `module_name`: 来源模块的 `__name__`
+
+**返回：**
+- `int`: 被卸载的 impl 数量
+
+**示例：**
+
+```python
+import mutobj
+
+# 卸载模块 B 的所有实现
+removed = mutobj.unregister_module_impls("myapp.module_b")
+print(f"卸载了 {removed} 个实现")
+```
+
+**行为规则：**
+- 活跃实现被卸载 → 恢复为链中上一层
+- 中间层被卸载 → 活跃实现不变
+- 全部外部 impl 卸载 → 恢复为声明中的默认实现
+- 卸载不存在的模块 → 返回 0，无操作
 
 ---
 
@@ -221,7 +250,7 @@ def cat_speak(self: Cat) -> str:
 
 ### NotImplementedError
 
-调用未实现的方法时抛出。
+调用桩方法（方法体为 `...` 或 `pass`）且无 `@impl` 注册时抛出。如果方法体有真实代码，则作为默认实现执行，不会抛出此异常。
 
 ```python
 class Service(mutobj.Declaration):
@@ -235,17 +264,11 @@ s.process()  # NotImplementedError: Method 'process' is declared in Service but 
 ### ValueError
 
 - 尝试实现未声明的方法
-- 重复实现方法但未设置 `override=True`
 
 ```python
-# 重复实现
-@mutobj.impl(User.greet)
-def greet_v1(self: User) -> str:
-    return "v1"
-
-@mutobj.impl(User.greet)  # ValueError: Method 'greet' already implemented
-def greet_v2(self: User) -> str:
-    return "v2"
+@mutobj.impl(User.nonexistent)  # ValueError: Method 'nonexistent' does not exist in User
+def bad(self: User) -> str:
+    return "error"
 ```
 
 ### AttributeError

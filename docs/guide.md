@@ -324,6 +324,136 @@ from . import product_impl
 __all__ = ["User", "Product"]
 ```
 
+## 声明文件写法
+
+Declaration 中的**所有公开方法**都是声明方法，方法体会被保存为默认实现。方法体可以使用 `...`、`pass` 或真实代码：
+
+```python
+import mutobj
+
+class Calculator(mutobj.Declaration):
+    base: int
+
+    # 桩方法——调用时返回 None（Ellipsis 不执行任何操作）
+    def add(self, n: int) -> int:
+        """加法"""
+        ...
+
+    # 带默认实现——如果没有 @impl 注册，直接使用此实现
+    def multiply(self, n: int) -> int:
+        """乘法，提供默认实现"""
+        return self.base * n
+
+    # pass 也是合法的桩方法体
+    def subtract(self, n: int) -> int:
+        pass
+```
+
+当通过 `@impl` 注册实现后，默认实现被覆盖。卸载 `@impl` 后，默认实现自动恢复。
+
+## IDE 跳转约定
+
+mutobj 使用 Python 原生机制实现 IDE 跳转和延迟加载，不需要额外支持。
+
+**方式一：`TYPE_CHECKING` 导入**
+
+```python
+from typing import TYPE_CHECKING
+if TYPE_CHECKING:
+    from . import user_impl
+
+class User(mutobj.Declaration):
+    def greet(self) -> str:
+        impl: user_impl.greet  # IDE 可识别类型，Ctrl+Click 跳转到实现
+```
+
+**方式二：函数体内 import + 转发**（推荐——精确到函数且支持延迟加载）
+
+```python
+class User(mutobj.Declaration):
+    def greet(self) -> str:
+        from .user_impl import greet
+        return greet(self)
+```
+
+**实现模块导入**：在声明文件末尾或包的 `__init__.py` 中统一导入：
+
+```python
+# 声明文件末尾
+from . import user_impl
+
+# 或在 __init__.py 中统一导入
+from .user import User
+from . import user_impl
+```
+
+## 覆盖链与模块卸载
+
+### 覆盖链
+
+多个模块可以通过 `@impl` 为同一方法注册实现，形成覆盖链。按注册顺序排列，最后注册的为活跃实现：
+
+```python
+# 声明
+class Service(mutobj.Declaration):
+    def process(self) -> str:
+        return "default"
+
+# module_a.py —— 第一个 @impl
+@mutobj.impl(Service.process)
+def process_a(self: Service) -> str:
+    return "module_a"
+
+# module_b.py —— 后注册，成为活跃实现
+@mutobj.impl(Service.process)
+def process_b(self: Service) -> str:
+    return "module_b"
+
+s = Service()
+s.process()  # "module_b"（链顶为活跃实现）
+```
+
+### 模块卸载
+
+使用 `unregister_module_impls` 移除指定模块的所有 `@impl`，自动恢复覆盖链上一层：
+
+```python
+import mutobj
+
+# 卸载 module_b 的实现
+mutobj.unregister_module_impls("module_b")
+s.process()  # "module_a"（恢复为链中上一层）
+
+# 继续卸载 module_a
+mutobj.unregister_module_impls("module_a")
+s.process()  # "default"（恢复为声明中的默认实现）
+```
+
+**行为规则**：
+- 卸载活跃实现 → 恢复为链中上一层
+- 卸载中间层 → 活跃实现不变
+- 全部卸载 → 恢复为声明中的默认实现
+- 卸载不存在的模块 → 无操作
+
+### 模块 Reload
+
+`@impl` 模块的 reload 支持两种方式：
+
+```python
+import importlib
+
+# 方式一：直接 reload（推荐）
+importlib.reload(my_app.user_impl)
+# 同模块的 @impl 就地替换，链中位置不变
+
+# 方式二：卸载 + reload
+mutobj.unregister_module_impls("my_app.user_impl")
+importlib.reload(my_app.user_impl)
+# 复用首次注册序号，回到链中原位置
+```
+
+中间层 reload 不影响活跃实现，链顶 reload 会更新为新函数。
+
 ## 最佳实践
 
 1. **声明文件保持简洁**：只包含类型注解和方法签名
