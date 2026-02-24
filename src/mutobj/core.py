@@ -9,7 +9,8 @@ from __future__ import annotations
 import weakref
 from typing import TypeVar, Generic, Callable, Any, get_type_hints, TYPE_CHECKING
 
-__all__ = ["Declaration", "Extension", "impl", "unregister_module_impls", "field"]
+__all__ = ["Declaration", "Extension", "impl", "unregister_module_impls", "field",
+           "discover_subclasses", "get_registry_generation"]
 
 # 类型变量
 T = TypeVar("T", bound="Declaration")
@@ -32,6 +33,9 @@ _property_registry: dict[type, dict[str, "Property"]] = {}
 
 # 全局类注册表: {(模块名, qualname): 类}，用于 reload 时的 in-place 更新
 _class_registry: dict[tuple[str, str], type] = {}
+
+# 注册表全局 generation 计数器：类注册/更新、@impl 注册/卸载时递增
+_registry_generation: int = 0
 
 # 声明方法标记
 _DECLARED_METHODS: str = "__mutobj_declared_methods__"
@@ -200,6 +204,7 @@ def _register_to_chain(
         是否成为链顶（活跃实现）
     """
     global _impl_seq
+    global _registry_generation
 
     key = (target_cls, impl_key)
     chain = _impl_chain.setdefault(key, [])
@@ -212,6 +217,7 @@ def _register_to_chain(
     if existing_idx is not None:
         old_seq = chain[existing_idx][2]
         chain[existing_idx] = (func, source_module, old_seq)
+        _registry_generation += 1
         return existing_idx == len(chain) - 1
 
     # 2. 检查卸载后重新注册（unregister + reimport）
@@ -225,6 +231,7 @@ def _register_to_chain(
 
     chain.append((func, source_module, seq))
     chain.sort(key=lambda x: x[2])
+    _registry_generation += 1
     return chain[-1][1] == source_module
 
 
@@ -565,10 +572,13 @@ class DeclarationMeta(type):
         if existing is not None and existing is not cls:
             _update_class_inplace(existing, cls)
             _migrate_registries(existing, cls)
+            global _registry_generation
+            _registry_generation += 1
             return existing
 
         # 首次定义：注册到 _class_registry
         _class_registry[key] = cls
+        _registry_generation += 1
         return cls
 
 
@@ -829,6 +839,10 @@ def unregister_module_impls(module_name: str) -> int:
             _apply_impl(cls, impl_key, chain[-1][0])
         # 若卸载的是中间层，活跃实现不变，无需操作
 
+    if removed > 0:
+        global _registry_generation
+        _registry_generation += 1
+
     return removed
 
 
@@ -845,3 +859,30 @@ def register_module_impls(*modules: Any) -> None:
     Args:
         modules: 实现模块（当前不做任何处理）
     """
+
+
+def discover_subclasses(base_cls: type) -> list[type]:
+    """返回 _class_registry 中 base_cls 的所有已注册子类（不含 base_cls 自身）。
+
+    每次调用重新扫描 registry，结果反映当前注册状态。
+    支持运行时新增类（模块加载）和移除类（模块卸载）。
+
+    Args:
+        base_cls: 要查找子类的基类，必须是 Declaration 的子类
+
+    Returns:
+        base_cls 的所有已注册子类列表（不保证顺序）
+    """
+    return [
+        cls for cls in _class_registry.values()
+        if cls is not base_cls and isinstance(cls, type) and issubclass(cls, base_cls)
+    ]
+
+
+def get_registry_generation() -> int:
+    """返回注册表的当前 generation 号。
+
+    任何类注册/更新、@impl 注册/卸载都会导致 generation 递增。
+    调用方可通过比较前后 generation 判断是否需要重新扫描。
+    """
+    return _registry_generation
