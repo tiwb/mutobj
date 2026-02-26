@@ -6,11 +6,12 @@ mutobj 核心模块
 
 from __future__ import annotations
 
+import importlib
 import weakref
 from typing import TypeVar, Generic, Callable, Any, get_type_hints, TYPE_CHECKING
 
 __all__ = ["Declaration", "Extension", "impl", "unregister_module_impls", "field",
-           "discover_subclasses", "get_registry_generation"]
+           "discover_subclasses", "get_registry_generation", "resolve_class"]
 
 # 类型变量
 T = TypeVar("T", bound="Declaration")
@@ -877,6 +878,52 @@ def discover_subclasses(base_cls: type) -> list[type]:
         cls for cls in _class_registry.values()
         if cls is not base_cls and isinstance(cls, type) and issubclass(cls, base_cls)
     ]
+
+
+def resolve_class(class_path: str, base_cls: type | None = None) -> type:
+    """通过类路径字符串解析 Declaration 子类，未注册时自动 import。
+
+    支持两种格式：
+    - 短名：``"AnthropicProvider"``（在已注册类中按 qualname 搜索）
+    - 全路径：``"mutbot.copilot.provider.CopilotProvider"``（先搜索，未找到则自动 import）
+
+    Args:
+        class_path: 类的短名或全路径（``模块.类名``）
+        base_cls: 可选，验证解析结果是否为指定基类的子类
+
+    Returns:
+        解析到的 Declaration 子类
+
+    Raises:
+        ValueError: 找不到类、类型不匹配、或 import 失败
+    """
+    # 1. 已注册类中查找（短名、简单类名或全路径均可匹配）
+    for (mod, qualname), cls in _class_registry.items():
+        if class_path in (qualname, cls.__name__, f"{mod}.{qualname}"):
+            if base_cls is not None and not issubclass(cls, base_cls):
+                raise ValueError(
+                    f"Class {class_path} is not a subclass of {base_cls.__name__}"
+                )
+            return cls
+
+    # 2. 全路径时，自动 import 模块（DeclarationMeta.__new__ 会自动注册）
+    if "." in class_path:
+        module_path, class_name = class_path.rsplit(".", 1)
+        try:
+            importlib.import_module(module_path)
+        except ImportError as e:
+            raise ValueError(f"Cannot import module for {class_path}: {e}") from e
+
+        key = (module_path, class_name)
+        if key in _class_registry:
+            cls = _class_registry[key]
+            if base_cls is not None and not issubclass(cls, base_cls):
+                raise ValueError(
+                    f"Class {class_path} is not a subclass of {base_cls.__name__}"
+                )
+            return cls
+
+    raise ValueError(f"Cannot resolve class: {class_path}")
 
 
 def get_registry_generation() -> int:
