@@ -105,6 +105,17 @@ pytest
 mypy src/mutobj
 ```
 
+## 发布
+
+Tag 触发自动发布（PyPI Trusted Publishers，无需 token）：
+
+```bash
+git tag v0.2.x
+git push origin v0.2.x
+```
+
+源码版本保持 `x.y.999`，CI 从 tag 提取正式版本号替换后构建发布。
+
 ## License
 
 MIT License - 详见 [LICENSE](LICENSE)
