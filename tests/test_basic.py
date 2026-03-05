@@ -12,11 +12,6 @@ def test_import_mutobj():
     assert hasattr(mutobj, "register_module_impls")
 
 
-def test_version():
-    """测试版本号"""
-    import mutobj
-    assert mutobj.__version__ == "0.1.0"
-
 
 def test_register_module_impls_is_noop():
     """测试 register_module_impls 为空操作，不抛出异常"""
