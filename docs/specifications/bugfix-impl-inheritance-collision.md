@@ -1,6 +1,6 @@
 # `@impl` 继承桩方法冲突 设计规范
 
-**状态**：🔄 进行中
+**状态**：✅ 已完成
 **日期**：2026-02-25
 **类型**：Bug修复
 
@@ -167,37 +167,41 @@ for base in bases:
 
 ## 4. 实施步骤清单
 
-### 阶段一：修复 [待开始]
+### 阶段一：修复 [✅ 已完成]
 
-- [ ] **Task 1.1**: 子类继承声明方法时自动创建独立链条
-  - [ ] `DeclarationMeta.__new__` 中，遍历基类的 `_DECLARED_METHODS`，为未重新定义的方法创建子类专属链条和桩方法
-  - [ ] 同步处理 `_DECLARED_CLASSMETHODS` 和 `_DECLARED_STATICMETHODS`
-  - [ ] 处理 property 声明（如有）
-  - 状态：⏸️ 待开始
+- [x] **Task 1.1**: 子类继承声明方法时自动创建独立链条
+  - [x] `DeclarationMeta.__new__` 中，遍历基类的 `_DECLARED_METHODS`，为未重新定义的方法创建子类专属委托函数和链条
+  - [x] 同步处理 `_DECLARED_CLASSMETHODS` 和 `_DECLARED_STATICMETHODS`
+  - [x] classmethod 委托正确传递子类 cls 参数
+  - 状态：✅ 已完成
 
-### 阶段二：测试 [待开始]
+### 阶段二：测试 [✅ 已完成]
 
-- [ ] **Task 2.1**: 继承冲突场景单元测试
-  - [ ] 多子类继承同一桩方法，各自 `@impl` 后行为独立
-  - [ ] 单子类场景行为不变（回归）
-  - [ ] classmethod / staticmethod 继承场景
-  - [ ] 深层继承链（A → B → C，C 未重新定义 A 的方法）
-  - 状态：⏸️ 待开始
+- [x] **Task 2.1**: 继承冲突场景单元测试
+  - [x] 多子类继承同一桩方法，各自 `@impl` 后行为独立
+  - [x] 单子类场景行为不变（回归）
+  - [x] 子类 @impl 不影响父类
+  - [x] classmethod / staticmethod 继承场景
+  - [x] 深层继承链（A → B → C，C 有自己的实现，B 继承 A 的）
+  - [x] 子类未提供 @impl 时委托给基类实现
+  - 状态：✅ 已完成
 
-- [ ] **Task 2.2**: mutagent 回归验证
-  - [ ] 移除 `AnthropicProvider` / `OpenAIProvider` / `CopilotProvider` 中类体内定义的 `send()` 方法，恢复为 `@impl` 形式
-  - [ ] 全部测试通过
-  - 状态：⏸️ 待开始
+- [x] **Task 2.2**: mutbot 集成验证
+  - [x] session_impl.py 生命周期方法改为 per-subclass @impl（TerminalSession.on_create, AgentSession.on_stop 等）
+  - [x] 移除 isinstance 分支
+  - [x] 381 tests passed
+  - 状态：✅ 已完成
 
 ## 5. 测试验证
 
-### 单元测试
-- [ ] 多子类 `@impl` 独立性
-- [ ] 单子类回归
-- [ ] classmethod / staticmethod 变体
-- [ ] 深层继承链
-- 执行结果：待执行
+### 单元测试（mutobj 154 passed）
+- [x] 多子类 `@impl` 独立性
+- [x] 单子类回归
+- [x] 子类 @impl 不影响父类
+- [x] classmethod / staticmethod 变体
+- [x] 深层继承链
+- [x] 子类未 @impl 时委托基类
 
-### 集成测试
-- [ ] mutagent 全量测试通过（恢复 `@impl` 形式后）
-- 执行结果：待执行
+### 集成测试（mutbot 381 passed）
+- [x] session_impl.py 生命周期方法改为 per-subclass @impl
+- [x] 移除所有 isinstance 分支

@@ -220,3 +220,151 @@ class TestExtensionWithInheritance:
         d = Dog(name="Buddy", breed="Labrador")
         assert d.greet() == "Hello, I'm Buddy (called 1 times)"
         assert d.greet() == "Hello, I'm Buddy (called 2 times)"
+
+
+class TestInheritedImplCollision:
+    """测试多子类继承同一桩方法时 @impl 互不干扰"""
+
+    def test_multi_subclass_independent_impl(self):
+        """核心场景：多子类继承同一桩方法，各自 @impl 后行为独立"""
+        class Base(mutobj.Declaration):
+            def process(self, data: str) -> str: ...
+
+        class DriverA(Base):
+            pass
+
+        class DriverB(Base):
+            pass
+
+        @mutobj.impl(DriverA.process)
+        def process_a(self, data):
+            return "A: " + data
+
+        @mutobj.impl(DriverB.process)
+        def process_b(self, data):
+            return "B: " + data
+
+        a = DriverA()
+        b = DriverB()
+        assert a.process("x") == "A: x"
+        assert b.process("x") == "B: x"
+
+    def test_single_subclass_unaffected(self):
+        """单子类场景行为不变（回归）"""
+        class Base(mutobj.Declaration):
+            def compute(self) -> int: ...
+
+        class Child(Base):
+            pass
+
+        @mutobj.impl(Child.compute)
+        def compute_child(self):
+            return 42
+
+        assert Child().compute() == 42
+
+    def test_parent_impl_not_affected_by_child(self):
+        """子类 @impl 不影响父类"""
+        class Base(mutobj.Declaration):
+            value: int
+
+            def compute(self) -> int: ...
+
+        @mutobj.impl(Base.compute)
+        def compute_base(self):
+            return self.value
+
+        class Derived(Base):
+            pass
+
+        @mutobj.impl(Derived.compute)
+        def compute_derived(self):
+            return self.value * 2
+
+        assert Base(value=5).compute() == 5
+        assert Derived(value=5).compute() == 10
+
+    def test_deep_inheritance_chain(self):
+        """深层继承链：A → B → C，C 未重新定义 A 的方法"""
+        class A(mutobj.Declaration):
+            def method(self) -> str: ...
+
+        class B(A):
+            pass
+
+        class C(B):
+            pass
+
+        @mutobj.impl(A.method)
+        def method_a(self):
+            return "A"
+
+        @mutobj.impl(C.method)
+        def method_c(self):
+            return "C"
+
+        assert A().method() == "A"
+        assert B().method() == "A"  # B 继承 A 的实现
+        assert C().method() == "C"  # C 有自己的实现
+
+    def test_classmethod_inheritance_collision(self):
+        """classmethod 继承冲突修复"""
+        class Base(mutobj.Declaration):
+            @classmethod
+            def create(cls) -> str: ...
+
+        class ImplA(Base):
+            pass
+
+        class ImplB(Base):
+            pass
+
+        @mutobj.impl(ImplA.create)
+        def create_a(cls):
+            return "created A"
+
+        @mutobj.impl(ImplB.create)
+        def create_b(cls):
+            return "created B"
+
+        assert ImplA.create() == "created A"
+        assert ImplB.create() == "created B"
+
+    def test_staticmethod_inheritance_collision(self):
+        """staticmethod 继承冲突修复"""
+        class Base(mutobj.Declaration):
+            @staticmethod
+            def helper() -> str: ...
+
+        class ImplA(Base):
+            pass
+
+        class ImplB(Base):
+            pass
+
+        @mutobj.impl(ImplA.helper)
+        def helper_a():
+            return "helper A"
+
+        @mutobj.impl(ImplB.helper)
+        def helper_b():
+            return "helper B"
+
+        assert ImplA.helper() == "helper A"
+        assert ImplB.helper() == "helper B"
+
+    def test_inherited_method_delegates_to_base_without_impl(self):
+        """子类未提供 @impl 时，委托给基类实现"""
+        class Base(mutobj.Declaration):
+            name: str
+
+            def greet(self) -> str: ...
+
+        @mutobj.impl(Base.greet)
+        def greet_base(self):
+            return f"Hello {self.name}"
+
+        class Child(Base):
+            pass
+
+        assert Child(name="World").greet() == "Hello World"

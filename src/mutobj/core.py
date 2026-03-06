@@ -569,6 +569,85 @@ class DeclarationMeta(type):
 
         setattr(cls, _DECLARED_METHODS, declared_methods)
 
+        # 子类继承声明方法时，自动创建独立链条
+        # 解决多子类继承同一桩方法后 @impl 冲突问题
+        for base in cls.__mro__[1:]:
+            if base is cls or base.__name__ == "Declaration" or base is object:
+                continue
+
+            # 继承普通方法
+            for method_name in getattr(base, _DECLARED_METHODS, set()):
+                if method_name in declared_methods:
+                    continue  # 当前类已重新定义
+                if (cls, method_name) in _impl_chain:
+                    continue  # 已有链条
+                # 创建委托函数：late-bind 查找基类当前实现
+                def _make_delegate(b: type, mn: str) -> Callable[..., Any]:
+                    def delegate(self: Any, *args: Any, **kwargs: Any) -> Any:
+                        return getattr(b, mn)(self, *args, **kwargs)
+                    delegate.__name__ = mn
+                    delegate.__qualname__ = f"{cls.__name__}.{mn}"
+                    delegate.__mutobj_class__ = cls
+                    return delegate
+                delegate = _make_delegate(base, method_name)
+                _impl_chain[(cls, method_name)] = [
+                    (delegate, "__default__", 0)
+                ]
+                setattr(cls, method_name, delegate)
+                declared_methods.add(method_name)
+
+            # 继承 classmethod
+            for method_name in getattr(base, _DECLARED_CLASSMETHODS, set()):
+                if method_name in declared_classmethods:
+                    continue
+                if (cls, method_name) in _impl_chain:
+                    continue
+                def _make_cm_delegate(b: type, mn: str) -> Callable[..., Any]:
+                    def delegate(cls_arg: type, *args: Any, **kwargs: Any) -> Any:
+                        # 获取基类的底层函数，用子类的 cls 调用
+                        base_cm = b.__dict__.get(mn)
+                        if base_cm is not None:
+                            func = base_cm.__func__ if hasattr(base_cm, '__func__') else base_cm
+                            return func(cls_arg, *args, **kwargs)
+                        return getattr(b, mn)(*args, **kwargs)
+                    delegate.__name__ = mn
+                    delegate.__qualname__ = f"{cls.__name__}.{mn}"
+                    delegate.__mutobj_class__ = cls
+                    delegate.__mutobj_is_classmethod__ = True
+                    return delegate
+                delegate = _make_cm_delegate(base, method_name)
+                _impl_chain[(cls, method_name)] = [
+                    (delegate, "__default__", 0)
+                ]
+                setattr(cls, method_name, classmethod(delegate))
+                declared_classmethods.add(method_name)
+
+            # 继承 staticmethod
+            for method_name in getattr(base, _DECLARED_STATICMETHODS, set()):
+                if method_name in declared_staticmethods:
+                    continue
+                if (cls, method_name) in _impl_chain:
+                    continue
+                def _make_sm_delegate(b: type, mn: str) -> Callable[..., Any]:
+                    def delegate(*args: Any, **kwargs: Any) -> Any:
+                        return getattr(b, mn)(*args, **kwargs)
+                    delegate.__name__ = mn
+                    delegate.__qualname__ = f"{cls.__name__}.{mn}"
+                    delegate.__mutobj_class__ = cls
+                    delegate.__mutobj_is_staticmethod__ = True
+                    return delegate
+                delegate = _make_sm_delegate(base, method_name)
+                _impl_chain[(cls, method_name)] = [
+                    (delegate, "__default__", 0)
+                ]
+                setattr(cls, method_name, staticmethod(delegate))
+                declared_staticmethods.add(method_name)
+
+        # 更新声明集合（可能因继承扩展了）
+        setattr(cls, _DECLARED_METHODS, declared_methods)
+        setattr(cls, _DECLARED_CLASSMETHODS, declared_classmethods)
+        setattr(cls, _DECLARED_STATICMETHODS, declared_staticmethods)
+
         # Reload: 如果已存在同 (module, qualname) 的类，就地更新
         if existing is not None and existing is not cls:
             _update_class_inplace(existing, cls)
