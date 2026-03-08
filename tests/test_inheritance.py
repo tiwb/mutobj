@@ -210,7 +210,7 @@ class TestExtensionWithInheritance:
 
         @mutobj.impl(Animal.greet)
         def greet(self: Animal) -> str:
-            ext = AnimalExt.of(self)
+            ext = AnimalExt.get_or_create(self)
             ext.increment()
             return f"Hello, I'm {self.name} (called {ext._count} times)"
 

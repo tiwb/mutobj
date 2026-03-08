@@ -278,7 +278,7 @@ class TestDefaultsWithExtension:
                 return self.label
 
         item = Item()
-        ext = ItemExt.of(item)
+        ext = ItemExt.get_or_create(item)
         assert ext.get_label() == "untitled"
 
 

@@ -11,7 +11,8 @@ import weakref
 from typing import TypeVar, Generic, Callable, Any, get_type_hints, TYPE_CHECKING
 
 __all__ = ["Declaration", "Extension", "impl", "unregister_module_impls", "field",
-           "discover_subclasses", "get_registry_generation", "resolve_class"]
+           "discover_subclasses", "get_registry_generation", "resolve_class",
+           "extensions", "extension_types"]
 
 # 类型变量
 T = TypeVar("T", bound="Declaration")
@@ -695,24 +696,11 @@ class Declaration(metaclass=DeclarationMeta):
 # Extension 视图缓存
 _extension_cache: weakref.WeakKeyDictionary[Declaration, dict[type, Any]] = weakref.WeakKeyDictionary()
 
-
-class ExtensionMeta(type):
-    """Extension 的元类"""
-
-    _target_class: type | None = None
-
-    def __getitem__(cls, target: type[T]) -> type[Extension[T]]:
-        """支持 Extension[User] 语法"""
-        # 创建绑定到目标类的 Extension 子类
-        new_cls = type(
-            f"{cls.__name__}[{target.__name__}]",
-            (cls,),
-            {"_target_class": target}
-        )
-        return new_cls
+# Extension 注册表：{Declaration 类: [Extension 子类, ...]}
+_extension_registry: dict[type, list[type[Extension]]] = {}
 
 
-class Extension(Generic[T], metaclass=ExtensionMeta):
+class Extension(Generic[T]):
     """
     Extension 泛型基类
 
@@ -730,33 +718,74 @@ class Extension(Generic[T], metaclass=ExtensionMeta):
     _target_class: type | None = None
     _instance: Declaration | None = None
 
-    def __init__(self) -> None:
-        self._instance = None
+    def __init_subclass__(cls, **kwargs: Any) -> None:
+        super().__init_subclass__(**kwargs)
+        # 只检查当前类直接声明的 __orig_bases__（不继承父类的）
+        for base in cls.__dict__.get("__orig_bases__", ()):
+            origin = getattr(base, "__origin__", None)
+            if origin is not None and issubclass(origin, Extension):
+                args = getattr(base, "__args__", None)
+                if args:
+                    cls._target_class = args[0]
+                    _extension_registry.setdefault(args[0], []).append(cls)
+                return
 
     @classmethod
-    def of(cls, instance: T) -> Extension[T]:
+    def get_or_create(cls, instance: T) -> Extension[T]:
         """
-        获取实例的 Extension 视图
+        确保存在并返回 Extension 实例
+
+        不存在则创建，存在则返回缓存实例。
 
         Args:
             instance: mutobj.Declaration 的实例
 
         Returns:
-            缓存的 Extension 视图对象
+            缓存的 Extension 实例
         """
         if instance not in _extension_cache:
             _extension_cache[instance] = {}
 
         cache = _extension_cache[instance]
         if cls not in cache:
-            ext = cls()
+            ext = cls.__new__(cls)
             ext._instance = instance
-            # 调用初始化钩子
-            if hasattr(ext, "__extension_init__"):
-                ext.__extension_init__()
+            # 处理 field 描述符：遍历 MRO 收集 Field 实例
+            processed: set[str] = set()
+            for klass in cls.__mro__:
+                for attr_name in getattr(klass, "__annotations__", {}):
+                    if attr_name in processed:
+                        continue
+                    processed.add(attr_name)
+                    attr_value = getattr(klass, attr_name, _MISSING)
+                    if isinstance(attr_value, Field):
+                        if attr_value.default_factory is not None:
+                            setattr(ext, attr_name, attr_value.default_factory())
+                        elif attr_value.default is not _MISSING:
+                            setattr(ext, attr_name, attr_value.default)
+            ext.__init__()
             cache[cls] = ext
 
         return cache[cls]
+
+    @classmethod
+    def get(cls, instance: T) -> Extension[T] | None:
+        """
+        查询 Extension 实例，不存在返回 None
+
+        Args:
+            instance: mutobj.Declaration 的实例
+
+        Returns:
+            已缓存的 Extension 实例，或 None
+        """
+        cache = _extension_cache.get(instance)
+        if cache is not None:
+            return cache.get(cls)
+        return None
+
+    def __init__(self) -> None:
+        pass
 
     def __getattr__(self, name: str) -> Any:
         """代理访问目标实例的属性"""
@@ -1012,3 +1041,50 @@ def get_registry_generation() -> int:
     调用方可通过比较前后 generation 判断是否需要重新扫描。
     """
     return _registry_generation
+
+
+def extension_types(
+    decl_class: type[Declaration],
+    filter_type: type | None = None,
+) -> list[type[Extension]]:
+    """查询 Declaration 类注册了哪些 Extension 类型
+
+    沿 Declaration 的 MRO 收集所有注册的 Extension 类型。
+
+    Args:
+        decl_class: Declaration 类（非实例）
+        filter_type: 可选，按类型过滤（issubclass 检查）
+
+    Returns:
+        注册的 Extension 类型列表
+    """
+    result: list[type[Extension]] = []
+    seen: set[type] = set()
+    for klass in decl_class.__mro__:
+        for ext_cls in _extension_registry.get(klass, []):
+            if ext_cls not in seen:
+                seen.add(ext_cls)
+                if filter_type is None or issubclass(ext_cls, filter_type):
+                    result.append(ext_cls)
+    return result
+
+
+def extensions(
+    instance: Declaration,
+    filter_type: type | None = None,
+) -> list[Extension]:
+    """枚举实例上已创建的 Extension 实例（不触发创建）
+
+    Args:
+        instance: Declaration 实例
+        filter_type: 可选，按类型过滤（isinstance 检查）
+
+    Returns:
+        已创建的 Extension 实例列表
+    """
+    cache = _extension_cache.get(instance)
+    if cache is None:
+        return []
+    if filter_type is None:
+        return list(cache.values())
+    return [ext for ext in cache.values() if isinstance(ext, filter_type)]

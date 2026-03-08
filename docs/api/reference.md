@@ -138,13 +138,17 @@ print(f"卸载了 {removed} 个实现")
 
 Extension 泛型基类，用于为 Declaration 子类提供扩展功能和私有状态。
 
+定义 `Extension[T]` 子类时，自动注册到目标 Declaration 类型的 Extension 注册表中，可通过 `extension_types()` 查询。
+
 ```python
 class UserExt(mutobj.Extension[User]):
     _counter: int = 0
+    _history: list = mutobj.field(default_factory=list)
 
-    def __extension_init__(self):
-        """可选：Extension 初始化钩子"""
-        self._counter = 0
+    def __init__(self):
+        """可选：初始化钩子（self._instance 和 field 值均已可用）"""
+        if self._instance.name:
+            self._history.append(f"created for {self._instance.name}")
 
     def _helper(self) -> str:
         """私有辅助方法"""
@@ -152,36 +156,103 @@ class UserExt(mutobj.Extension[User]):
 ```
 
 **特性：**
-- 通过 `Extension[TargetClass]` 语法绑定目标类
+- 通过 `Extension[TargetClass]` 语法绑定目标类并自动注册
 - 支持私有状态（`_` 前缀属性存储在 Extension 实例上）
 - 可通过 `self.attr` 访问目标实例的公共属性
-- 可定义 `__extension_init__` 钩子进行初始化
+- 支持 `field(default_factory=...)` 声明可变默认值
+- `__init__` 中可访问 `self._instance` 和所有 field 值
 
 ---
 
-### `Extension.of(instance)`
+### `Extension.get_or_create(instance)`
 
-获取实例的 Extension 视图。
+确保存在并返回 Extension 实例。不存在则创建，存在则返回缓存实例。
 
 **参数：**
 - `instance`: mutobj.Declaration 的实例
 
 **返回：**
-- 缓存的 Extension 视图对象
+- Extension 实例（永不为 None）
 
 **示例：**
 
 ```python
 @mutobj.impl(User.greet)
 def greet(self: User) -> str:
-    ext = UserExt.of(self)
+    ext = UserExt.get_or_create(self)
     ext._counter += 1
     return f"Hello, {self.name}! (called {ext._counter} times)"
 ```
 
-**特性：**
-- 视图对象被缓存，同一实例多次调用返回同一对象
-- 首次调用时自动调用 `__extension_init__`（如果定义）
+---
+
+### `Extension.get(instance)`
+
+查询 Extension 实例，不存在返回 None。
+
+**参数：**
+- `instance`: mutobj.Declaration 的实例
+
+**返回：**
+- 已缓存的 Extension 实例，或 `None`
+
+**示例：**
+
+```python
+def maybe_use_cache(user: User) -> str | None:
+    ext = UserCacheExt.get(user)
+    if ext is not None:
+        return ext._cached_result
+    return None
+```
+
+---
+
+### `mutobj.extensions(instance, filter_type=None)`
+
+枚举实例上已创建的 Extension 实例（不触发创建）。
+
+**参数：**
+- `instance`: Declaration 实例
+- `filter_type`: 可选，按类型过滤（`isinstance` 检查）
+
+**返回：**
+- 已创建的 Extension 实例列表
+
+**示例：**
+
+```python
+# 枚举所有 Extension
+for ext in mutobj.extensions(user):
+    print(type(ext).__name__)
+
+# 按接口过滤
+for ext in mutobj.extensions(user, Serializable):
+    data.update(ext._serialize())
+```
+
+---
+
+### `mutobj.extension_types(decl_class, filter_type=None)`
+
+查询 Declaration 类注册了哪些 Extension 类型。沿 Declaration 的 MRO 收集。
+
+**参数：**
+- `decl_class`: Declaration 类（非实例）
+- `filter_type`: 可选，按类型过滤（`issubclass` 检查）
+
+**返回：**
+- 注册的 Extension 类型列表
+
+**示例：**
+
+```python
+# 查询所有注册的 Extension 类型
+ext_types = mutobj.extension_types(User)
+
+# 按接口过滤
+serializable_types = mutobj.extension_types(User, Serializable)
+```
 
 ---
 
@@ -306,7 +377,7 @@ class Config(mutobj.Declaration):
 **异常：**
 - `TypeError`: 同时传入 `default` 和 `default_factory`
 
-**注意：** 可变类型（`list`、`dict`、`set`、`bytearray`）不能直接赋值为属性默认值，否则会在类定义时抛出 `TypeError`。
+**注意：** 可变类型（`list`、`dict`、`set`、`bytearray`）不能直接赋值为属性默认值，否则会在类定义时抛出 `TypeError`。Extension 中同样支持 `field()` 声明可变默认值。
 
 ---
 
