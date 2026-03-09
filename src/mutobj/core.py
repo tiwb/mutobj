@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import importlib
 import weakref
-from typing import TypeVar, Generic, Callable, Any, get_type_hints, TYPE_CHECKING
+from typing import TypeVar, Generic, Callable, Any
 
 __all__ = ["Declaration", "Extension", "impl", "unregister_module_impls", "field",
            "discover_subclasses", "get_registry_generation", "resolve_class",
@@ -402,7 +402,7 @@ def _migrate_registries(existing: type, new_cls: type) -> None:
 
         if existing_chain:
             # 替换已有链中的默认实现条目
-            for i, (f, m, s) in enumerate(existing_chain):
+            for i, (_f, m, _s) in enumerate(existing_chain):
                 if m == "__default__":
                     if new_default is not None:
                         existing_chain[i] = new_default
