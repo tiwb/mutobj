@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "mutobj"
-version = "0.2.999"
+version = "0.5.999"
 description = "Mutable Object Declaration - 支持声明与实现分离的类定义库"
 readme = "README.md"
 license = {text = "MIT"}

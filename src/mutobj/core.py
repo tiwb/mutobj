@@ -85,7 +85,7 @@ class Field:
         default_factory: Callable[[], Any] | None = None,
     ) -> None:
         if default is not _MISSING and default_factory is not None:
-            raise TypeError("不能同时指定 default 和 default_factory")
+            raise TypeError("cannot specify both default and default_factory")
         self.default = default
         self.default_factory = default_factory
 
@@ -486,9 +486,9 @@ class DeclarationMeta(type):
                 if isinstance(value, _MUTABLE_TYPES):
                     type_name = type(value).__name__  # pyright: ignore[reportUnknownArgumentType]
                     raise TypeError(
-                        f"Declaration '{name}' 的属性 '{attr_name}' 使用了可变默认值 "
-                        f"{type_name}。"
-                        f"请使用 field(default_factory={type_name}) 代替。"
+                        f"Declaration '{name}' attribute '{attr_name}' uses mutable default "
+                        f"value {type_name}. "
+                        f"Use field(default_factory={type_name}) instead."
                     )
                 # 不可变默认值
                 descriptor = AttributeDescriptor(attr_name, attr_type, default=value)
