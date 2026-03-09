@@ -63,3 +63,4 @@ warn_unused_configs = true
 [tool.pyright]
 pythonVersion = "3.11"
 typeCheckingMode = "strict"
+reportFunctionMemberAccess = false

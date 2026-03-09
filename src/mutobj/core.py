@@ -120,7 +120,7 @@ def _make_stub_method(name: str, cls: type) -> Callable[..., Any]:
     return stub
 
 
-def _make_stub_classmethod(name: str, cls: type) -> classmethod:
+def _make_stub_classmethod(name: str, cls: type) -> classmethod[Any, ..., Any]:
     """创建一个 classmethod 桩方法（覆盖链为空的异常回退）"""
     def stub(cls_arg: type, *args: Any, **kwargs: Any) -> Any:
         raise NotImplementedError(
@@ -134,7 +134,7 @@ def _make_stub_classmethod(name: str, cls: type) -> classmethod:
     return classmethod(stub)
 
 
-def _make_stub_staticmethod(name: str, cls: type) -> staticmethod:
+def _make_stub_staticmethod(name: str, cls: type) -> staticmethod[Any, Any]:
     """创建一个 staticmethod 桩方法（覆盖链为空的异常回退）"""
     def stub(*args: Any, **kwargs: Any) -> Any:
         raise NotImplementedError(
@@ -154,15 +154,15 @@ def _apply_impl(cls: type, impl_key: str, func: Callable[..., Any]) -> None:
         prop_name = impl_key[:-7]
         prop = _property_registry.get(cls, {}).get(prop_name)
         if prop is not None:
-            prop._fget = func
+            prop._fget = func  # pyright: ignore[reportPrivateUsage]
     elif impl_key.endswith(".setter"):
         prop_name = impl_key[:-7]
         prop = _property_registry.get(cls, {}).get(prop_name)
         if prop is not None:
-            prop._fset = func
+            prop._fset = func  # pyright: ignore[reportPrivateUsage]
     else:
-        declared_cm = getattr(cls, _DECLARED_CLASSMETHODS, set())
-        declared_sm = getattr(cls, _DECLARED_STATICMETHODS, set())
+        declared_cm: set[str] = getattr(cls, _DECLARED_CLASSMETHODS, set())
+        declared_sm: set[str] = getattr(cls, _DECLARED_STATICMETHODS, set())
         if impl_key in declared_cm:
             setattr(cls, impl_key, classmethod(func))
         elif impl_key in declared_sm:
@@ -177,15 +177,15 @@ def _restore_stub(cls: type, impl_key: str) -> None:
         prop_name = impl_key[:-7]
         prop = _property_registry.get(cls, {}).get(prop_name)
         if prop is not None:
-            prop._fget = None
+            prop._fget = None  # pyright: ignore[reportPrivateUsage]
     elif impl_key.endswith(".setter"):
         prop_name = impl_key[:-7]
         prop = _property_registry.get(cls, {}).get(prop_name)
         if prop is not None:
-            prop._fset = None
+            prop._fset = None  # pyright: ignore[reportPrivateUsage]
     else:
-        declared_cm = getattr(cls, _DECLARED_CLASSMETHODS, set())
-        declared_sm = getattr(cls, _DECLARED_STATICMETHODS, set())
+        declared_cm: set[str] = getattr(cls, _DECLARED_CLASSMETHODS, set())
+        declared_sm: set[str] = getattr(cls, _DECLARED_STATICMETHODS, set())
         if impl_key in declared_cm:
             setattr(cls, impl_key, _make_stub_classmethod(impl_key, cls))
         elif impl_key in declared_sm:
@@ -368,7 +368,7 @@ def _update_class_inplace(existing: type, new_cls: type) -> None:
             val.__mutobj_class__ = existing
         # Handle classmethod/staticmethod wrappers
         if isinstance(val, (classmethod, staticmethod)):
-            inner = val.__func__
+            inner: Callable[..., Any] = val.__func__  # pyright: ignore[reportUnknownMemberType, reportUnknownVariableType]
             if hasattr(inner, "__mutobj_class__"):
                 inner.__mutobj_class__ = existing
         # Fix Property.owner_cls
@@ -484,10 +484,11 @@ class DeclarationMeta(type):
                     continue
                 # 检测可变类型直接赋值
                 if isinstance(value, _MUTABLE_TYPES):
+                    type_name = type(value).__name__  # pyright: ignore[reportUnknownArgumentType]
                     raise TypeError(
                         f"Declaration '{name}' 的属性 '{attr_name}' 使用了可变默认值 "
-                        f"{type(value).__name__}。"
-                        f"请使用 field(default_factory={type(value).__name__}) 代替。"
+                        f"{type_name}。"
+                        f"请使用 field(default_factory={type_name}) 代替。"
                     )
                 # 不可变默认值
                 descriptor = AttributeDescriptor(attr_name, attr_type, default=value)
@@ -518,13 +519,13 @@ class DeclarationMeta(type):
                     _impl_chain.setdefault((cls, f"{prop_name}.getter"), []).append(
                         (prop_value.fget, "__default__", 0)
                     )
-                    mutobj_prop._fget = prop_value.fget
+                    mutobj_prop._fget = prop_value.fget  # pyright: ignore[reportPrivateUsage]
                 # 保存原始 setter 作为默认实现
                 if prop_value.fset is not None:
                     _impl_chain.setdefault((cls, f"{prop_name}.setter"), []).append(
                         (prop_value.fset, "__default__", 0)
                     )
-                    mutobj_prop._fset = prop_value.fset
+                    mutobj_prop._fset = prop_value.fset  # pyright: ignore[reportPrivateUsage]
 
         _property_registry[cls] = prop_registry
         setattr(cls, _DECLARED_PROPERTIES, declared_properties)
@@ -534,7 +535,7 @@ class DeclarationMeta(type):
             if method_name.startswith("_"):
                 continue
             if isinstance(method_value, classmethod):
-                func = method_value.__func__
+                func: Callable[..., Any] = method_value.__func__  # pyright: ignore[reportUnknownMemberType, reportUnknownVariableType]
                 declared_classmethods.add(method_name)
                 _impl_chain.setdefault((cls, method_name), []).append(
                     (func, "__default__", 0)
@@ -548,7 +549,7 @@ class DeclarationMeta(type):
             if method_name.startswith("_"):
                 continue
             if isinstance(method_value, staticmethod):
-                func = method_value.__func__
+                func: Callable[..., Any] = method_value.__func__  # pyright: ignore[reportUnknownMemberType, reportUnknownVariableType]
                 declared_staticmethods.add(method_name)
                 _impl_chain.setdefault((cls, method_name), []).append(
                     (func, "__default__", 0)
@@ -573,11 +574,11 @@ class DeclarationMeta(type):
         # 子类继承声明方法时，自动创建独立链条
         # 解决多子类继承同一桩方法后 @impl 冲突问题
         for base in cls.__mro__[1:]:
-            if base is cls or base.__name__ == "Declaration" or base is object:
+            if base is cls or base.__name__ == "Declaration" or base is object:  # pyright: ignore[reportUnnecessaryComparison]
                 continue
 
             # 继承普通方法
-            for method_name in getattr(base, _DECLARED_METHODS, set()):
+            for method_name in getattr(base, _DECLARED_METHODS, set[str]()):
                 if method_name in declared_methods:
                     continue  # 当前类已重新定义
                 if (cls, method_name) in _impl_chain:
@@ -598,7 +599,7 @@ class DeclarationMeta(type):
                 declared_methods.add(method_name)
 
             # 继承 classmethod
-            for method_name in getattr(base, _DECLARED_CLASSMETHODS, set()):
+            for method_name in getattr(base, _DECLARED_CLASSMETHODS, set[str]()):
                 if method_name in declared_classmethods:
                     continue
                 if (cls, method_name) in _impl_chain:
@@ -624,7 +625,7 @@ class DeclarationMeta(type):
                 declared_classmethods.add(method_name)
 
             # 继承 staticmethod
-            for method_name in getattr(base, _DECLARED_STATICMETHODS, set()):
+            for method_name in getattr(base, _DECLARED_STATICMETHODS, set[str]()):
                 if method_name in declared_staticmethods:
                     continue
                 if (cls, method_name) in _impl_chain:
@@ -650,7 +651,7 @@ class DeclarationMeta(type):
         setattr(cls, _DECLARED_STATICMETHODS, declared_staticmethods)
 
         # Reload: 如果已存在同 (module, qualname) 的类，就地更新
-        if existing is not None and existing is not cls:
+        if existing is not None and existing is not cls:  # pyright: ignore[reportUnnecessaryComparison]
             _update_class_inplace(existing, cls)
             _migrate_registries(existing, cls)
             global _registry_generation
@@ -697,7 +698,7 @@ class Declaration(metaclass=DeclarationMeta):
 _extension_cache: weakref.WeakKeyDictionary[Declaration, dict[type, Any]] = weakref.WeakKeyDictionary()
 
 # Extension 注册表：{Declaration 类: [Extension 子类, ...]}
-_extension_registry: dict[type, list[type[Extension]]] = {}
+_extension_registry: dict[type, list[type[Extension[Any]]]] = {}
 
 
 class Extension(Generic[T]):
@@ -828,7 +829,7 @@ def impl(
 
         # 处理 property getter
         if isinstance(method, _PropertyGetterPlaceholder):
-            prop = method._prop
+            prop = method._prop  # pyright: ignore[reportPrivateUsage]
             target_cls = prop.owner_cls
             impl_key = f"{prop.name}.getter"
 
@@ -836,12 +837,12 @@ def impl(
                 target_cls, impl_key, func, source_module
             )
             if became_top:
-                prop._fget = func
+                prop._fget = func  # pyright: ignore[reportPrivateUsage]
             return func
 
         # 处理 property setter
         if isinstance(method, _PropertySetterPlaceholder):
-            prop = method._prop
+            prop = method._prop  # pyright: ignore[reportPrivateUsage]
             target_cls = prop.owner_cls
             impl_key = f"{prop.name}.setter"
 
@@ -849,7 +850,7 @@ def impl(
                 target_cls, impl_key, func, source_module
             )
             if became_top:
-                prop._fset = func
+                prop._fset = func  # pyright: ignore[reportPrivateUsage]
             return func
 
         # 获取目标类和方法名
@@ -984,7 +985,7 @@ def discover_subclasses(base_cls: type) -> list[type]:
     """
     return [
         cls for cls in _class_registry.values()
-        if cls is not base_cls and isinstance(cls, type) and issubclass(cls, base_cls)
+        if cls is not base_cls and isinstance(cls, type) and issubclass(cls, base_cls)  # pyright: ignore[reportUnnecessaryIsInstance]
     ]
 
 
@@ -1046,7 +1047,7 @@ def get_registry_generation() -> int:
 def extension_types(
     decl_class: type[Declaration],
     filter_type: type | None = None,
-) -> list[type[Extension]]:
+) -> list[type[Extension[Any]]]:
     """查询 Declaration 类注册了哪些 Extension 类型
 
     沿 Declaration 的 MRO 收集所有注册的 Extension 类型。
@@ -1058,7 +1059,7 @@ def extension_types(
     Returns:
         注册的 Extension 类型列表
     """
-    result: list[type[Extension]] = []
+    result: list[type[Extension[Any]]] = []
     seen: set[type] = set()
     for klass in decl_class.__mro__:
         for ext_cls in _extension_registry.get(klass, []):
@@ -1072,7 +1073,7 @@ def extension_types(
 def extensions(
     instance: Declaration,
     filter_type: type | None = None,
-) -> list[Extension]:
+) -> list[Extension[Any]]:
     """枚举实例上已创建的 Extension 实例（不触发创建）
 
     Args:
