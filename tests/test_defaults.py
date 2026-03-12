@@ -338,3 +338,159 @@ class TestDescriptorInternals:
     def test_missing_sentinel(self):
         assert repr(_MISSING) == "MISSING"
         assert bool(_MISSING) is False
+
+
+# ── 无注解属性覆盖 ────────────────────────────────────────────
+
+class TestUnannotatedOverride:
+    """子类用无注解赋值覆盖父类声明属性"""
+
+    # -- 核心场景 --
+
+    def test_basic_override(self):
+        """基本无注解覆盖：实例属性返回子类覆盖值"""
+        class View(mutobj.Declaration):
+            path: str = ""
+
+        class HealthView(View):
+            path = "/api/health"
+
+        assert HealthView().path == "/api/health"
+
+    def test_multi_level_skip_override(self):
+        """多层继承跳级覆盖：A→B→C，C 覆盖 A 的属性"""
+        class A(mutobj.Declaration):
+            x: int = 1
+
+        class B(A):
+            pass
+
+        class C(B):
+            x = 100
+
+        assert C().x == 100
+        assert B().x == 1  # B 不受影响
+
+    def test_kwargs_still_override(self):
+        """kwargs 仍能覆盖无注解默认值"""
+        class View(mutobj.Declaration):
+            path: str = ""
+
+        class HealthView(View):
+            path = "/api/health"
+
+        assert HealthView(path="/custom").path == "/custom"
+
+    def test_parent_unaffected(self):
+        """子类无注解覆盖不影响父类"""
+        class Base(mutobj.Declaration):
+            value: int = 0
+
+        class Child(Base):
+            value = 42
+
+        assert Base().value == 0
+        assert Child().value == 42
+
+    def test_mixed_annotated_and_unannotated(self):
+        """同一子类中带注解和无注解覆盖共存"""
+        class Base(mutobj.Declaration):
+            x: int = 1
+            y: str = "a"
+            z: float = 0.0
+
+        class Child(Base):
+            x: int = 10       # 带注解覆盖
+            y = "b"           # 无注解覆盖
+            # z 不覆盖
+
+        c = Child()
+        assert c.x == 10
+        assert c.y == "b"
+        assert c.z == 0.0
+
+    # -- 边界情况 --
+
+    def test_mutable_unannotated_override_raises(self):
+        """可变类型无注解覆盖应报 TypeError"""
+        class Base(mutobj.Declaration):
+            items: list[int] = field(default_factory=list)
+
+        with pytest.raises(TypeError, match="mutable default"):
+            class Child(Base):
+                items = [1, 2, 3]
+
+    def test_field_unannotated_override(self):
+        """field() 无注解覆盖应正确识别"""
+        class Base(mutobj.Declaration):
+            items: list[str] = field(default_factory=list)
+
+        class Child(Base):
+            items = field(default_factory=lambda: ["a", "b"])
+
+        assert Child().items == ["a", "b"]
+        assert Base().items == []  # 父类不受影响
+
+    def test_callable_not_mistaken_as_override(self):
+        """子类定义同名方法不应触发无注解覆盖逻辑（不创建新描述符）"""
+        class Base(mutobj.Declaration):
+            process: str = "default"
+
+        class Child(Base):
+            def process(self):
+                return "method"
+
+        # 无注解覆盖逻辑应跳过 callable，不为 Child 创建新的 AttributeDescriptor
+        child_desc = Child.__dict__.get("process")
+        assert not isinstance(child_desc, AttributeDescriptor)
+
+    def test_private_attr_not_triggered(self):
+        """私有属性不触发覆盖逻辑"""
+        class Base(mutobj.Declaration):
+            _internal: str = "base"
+
+        class Child(Base):
+            _internal = "child"
+
+        # _internal 不在 _attribute_registry 中（下划线开头跳过）
+        assert Child._internal == "child"
+
+    # -- 注册表与交互验证 --
+
+    def test_descriptor_created_on_subclass(self):
+        """无注解覆盖后，子类 __dict__ 中有独立的 AttributeDescriptor"""
+        class Base(mutobj.Declaration):
+            val: int = 0
+
+        class Child(Base):
+            val = 99
+
+        desc = Child.__dict__.get("val")
+        assert isinstance(desc, AttributeDescriptor)
+        assert desc.default == 99
+
+    def test_attribute_registry_updated(self):
+        """_attribute_registry 中子类包含覆盖属性"""
+        class Base(mutobj.Declaration):
+            val: int = 0
+
+        class Child(Base):
+            val = 99
+
+        assert "val" in _attribute_registry[Child]
+
+    def test_unannotated_override_with_impl(self):
+        """无注解覆盖属性在 @impl 方法中可正确访问"""
+        class View(mutobj.Declaration):
+            path: str = ""
+
+            def full_url(self) -> str: ...
+
+        @mutobj.impl(View.full_url)
+        def full_url(self: View) -> str:
+            return f"http://localhost{self.path}"
+
+        class HealthView(View):
+            path = "/api/health"
+
+        assert HealthView().full_url() == "http://localhost/api/health"

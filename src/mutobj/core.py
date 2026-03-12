@@ -502,6 +502,45 @@ class DeclarationMeta(type):
             setattr(cls, attr_name, descriptor)
             attr_registry[attr_name] = attr_type
 
+        # 处理无注解的属性覆盖：子类用 attr = value 覆盖父类声明属性
+        own_annotations = namespace.get("__annotations__", {})
+        for attr_name, value in namespace.items():
+            if attr_name in own_annotations:
+                continue  # 已经在上面的注解属性处理中处理过
+            if attr_name.startswith("_"):
+                continue
+            if callable(value) or isinstance(value, (property, classmethod, staticmethod)):
+                continue
+            if isinstance(value, AttributeDescriptor):
+                continue
+            # 查找父类 MRO 中的 AttributeDescriptor
+            parent_desc: AttributeDescriptor | None = None
+            for base in cls.__mro__[1:]:
+                base_val = base.__dict__.get(attr_name)
+                if isinstance(base_val, AttributeDescriptor):
+                    parent_desc = base_val
+                    break
+            if parent_desc is None:
+                continue
+            # 子类意图覆盖父类声明属性
+            if isinstance(value, Field):
+                descriptor = AttributeDescriptor(
+                    attr_name, parent_desc.annotation,
+                    default=value.default,
+                    default_factory=value.default_factory,
+                )
+            elif isinstance(value, _MUTABLE_TYPES):
+                type_name = type(value).__name__  # pyright: ignore[reportUnknownArgumentType]
+                raise TypeError(
+                    f"Declaration '{name}' attribute '{attr_name}' uses mutable default "
+                    f"value {type_name}. "
+                    f"Use field(default_factory={type_name}) instead."
+                )
+            else:
+                descriptor = AttributeDescriptor(attr_name, parent_desc.annotation, default=value)
+            setattr(cls, attr_name, descriptor)
+            attr_registry[attr_name] = parent_desc.annotation
+
         _attribute_registry[cls] = attr_registry
 
         # 处理 property 声明（所有 @property 转为 mutobj.Property，保存原始函数为默认实现）
