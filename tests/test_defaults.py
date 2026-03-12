@@ -137,7 +137,7 @@ class TestFieldFunction:
 
     def test_field_both_raises(self):
         """同时传 default 和 default_factory 报错"""
-        with pytest.raises(TypeError, match="不能同时指定"):
+        with pytest.raises(TypeError, match="cannot specify both"):
             field(default=1, default_factory=int)
 
 
@@ -147,22 +147,22 @@ class TestMutableDefaultError:
     """可变类型直接赋值报错"""
 
     def test_list_default_raises(self):
-        with pytest.raises(TypeError, match="可变默认值.*list"):
+        with pytest.raises(TypeError, match="mutable default.*list"):
             class Bad(mutobj.Declaration):
                 tags: list = []
 
     def test_dict_default_raises(self):
-        with pytest.raises(TypeError, match="可变默认值.*dict"):
+        with pytest.raises(TypeError, match="mutable default.*dict"):
             class Bad(mutobj.Declaration):
                 data: dict = {}
 
     def test_set_default_raises(self):
-        with pytest.raises(TypeError, match="可变默认值.*set"):
+        with pytest.raises(TypeError, match="mutable default.*set"):
             class Bad(mutobj.Declaration):
                 ids: set = set()
 
     def test_bytearray_default_raises(self):
-        with pytest.raises(TypeError, match="可变默认值.*bytearray"):
+        with pytest.raises(TypeError, match="mutable default.*bytearray"):
             class Bad(mutobj.Declaration):
                 buf: bytearray = bytearray()
 
