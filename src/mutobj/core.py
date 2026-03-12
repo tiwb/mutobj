@@ -703,6 +703,38 @@ class DeclarationMeta(type):
         return cls
 
 
+# 有序字段缓存：{类: [字段名, ...]}（基类在前，与 dataclass 一致）
+_ordered_fields_cache: dict[type, list[str]] = {}
+
+
+def _get_ordered_fields(cls: type) -> list[str]:
+    """获取类的有序字段列表（基类在前，子类在后），结果缓存。
+
+    顺序与 dataclass 一致：沿 MRO 从基类到派生类收集，去重保留首次出现。
+    MRO [C, A, B, Declaration, object] → 基类顺序 [A, B]，然后 C → 字段 x, y, z。
+    """
+    cached = _ordered_fields_cache.get(cls)
+    if cached is not None:
+        return cached
+    seen: set[str] = set()
+    fields: list[str] = []
+    # MRO 中 cls 自身以外的基类，按 MRO 顺序（即 dataclass 的基类顺序）
+    for klass in cls.__mro__[1:]:
+        if klass in _attribute_registry:
+            for attr_name in _attribute_registry[klass]:
+                if attr_name not in seen:
+                    seen.add(attr_name)
+                    fields.append(attr_name)
+    # 最后追加 cls 自身的字段
+    if cls in _attribute_registry:
+        for attr_name in _attribute_registry[cls]:
+            if attr_name not in seen:
+                seen.add(attr_name)
+                fields.append(attr_name)
+    _ordered_fields_cache[cls] = fields
+    return fields
+
+
 class Declaration(metaclass=DeclarationMeta):
     """
     mutobj 声明类的基类
@@ -710,8 +742,25 @@ class Declaration(metaclass=DeclarationMeta):
     用于定义接口声明，方法实现通过 @impl 装饰器在其他文件中提供
     """
 
-    def __init__(self, **kwargs: Any) -> None:
-        """初始化对象，支持通过关键字参数设置属性，自动应用默认值"""
+    def __init__(self, *args: Any, **kwargs: Any) -> None:
+        """初始化对象，支持通过位置参数和关键字参数设置属性，自动应用默认值"""
+        # 位置参数映射到字段名（按字段声明顺序，基类在前）
+        if args:
+            fields = _get_ordered_fields(type(self))
+            if len(args) > len(fields):
+                raise TypeError(
+                    f"{type(self).__name__}() takes {len(fields)} positional "
+                    f"arguments but {len(args)} were given"
+                )
+            for i, value in enumerate(args):
+                name = fields[i]
+                if name in kwargs:
+                    raise TypeError(
+                        f"{type(self).__name__}() got multiple values "
+                        f"for argument '{name}'"
+                    )
+                kwargs[name] = value
+
         # 遍历 MRO 中的所有类，收集所有属性（最派生类优先）
         applied: set[str] = set()
         for klass in type(self).__mro__:
