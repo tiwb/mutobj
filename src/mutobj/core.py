@@ -1132,6 +1132,28 @@ def get_registry_generation() -> int:
     return _registry_generation
 
 
+def get_declaration_doc(cls: type, method_name: str) -> str | None:
+    """获取 Declaration 类中方法的声明 docstring。
+
+    @impl 会覆盖类方法（包括 __doc__），此函数从 _impl_chain 中
+    取回声明时的原始 docstring。
+
+    Args:
+        cls: Declaration 子类
+        method_name: 方法名
+
+    Returns:
+        声明的 docstring，如果没有则返回 None
+    """
+    chain = _impl_chain.get((cls, method_name))
+    if not chain:
+        return None
+    for func, source_module, _seq in chain:
+        if source_module == "__default__":
+            return getattr(func, "__doc__", None)
+    return None
+
+
 def extension_types(
     decl_class: type[Declaration],
     filter_type: type | None = None,
