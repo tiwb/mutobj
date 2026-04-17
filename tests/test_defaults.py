@@ -494,3 +494,73 @@ class TestUnannotatedOverride:
             path = "/api/health"
 
         assert HealthView().full_url() == "http://localhost/api/health"
+
+
+# ── 自定义 __init__ 不调 super() 时默认值 ──────────────────────
+
+class TestInitDefaultValues:
+    """自定义 __init__ 未调用 super().__init__() 时，声明属性的默认值应仍然可用"""
+
+    def test_custom_init_without_super(self):
+        """核心场景：自定义 __init__ 不调 super()，默认值仍可访问"""
+        class View(mutobj.Declaration):
+            id: str = ""
+
+        class ChildView(View):
+            id = "child"
+
+            def __init__(self):
+                self.value = 0
+
+        v = ChildView()
+        assert v.id == "child"
+        assert v.value == 0
+
+    def test_parent_defaults_without_super(self):
+        """父类声明的默认值在子类不调 super() 时仍可用"""
+        class Base(mutobj.Declaration):
+            x: int = 10
+            y: str = "hello"
+
+        class Child(Base):
+            def __init__(self):
+                self.z = 99
+
+        c = Child()
+        assert c.x == 10
+        assert c.y == "hello"
+        assert c.z == 99
+
+    def test_default_factory_without_super(self):
+        """default_factory 在不调 super() 时仍正常工作"""
+        class Base(mutobj.Declaration):
+            items: list[int] = field(default_factory=list)
+
+        class Child(Base):
+            def __init__(self):
+                pass
+
+        c1 = Child()
+        c2 = Child()
+        assert c1.items == []
+        assert c1.items is not c2.items  # 每次创建独立实例
+
+    def test_kwargs_still_work(self):
+        """正常的 kwargs 构造不受影响"""
+        class View(mutobj.Declaration):
+            id: str = ""
+            name: str = "default"
+
+        v = View(id="test", name="foo")
+        assert v.id == "test"
+        assert v.name == "foo"
+
+    def test_positional_args_still_work(self):
+        """位置参数构造不受影响"""
+        class Point(mutobj.Declaration):
+            x: int = 0
+            y: int = 0
+
+        p = Point(1, 2)
+        assert p.x == 1
+        assert p.y == 2

@@ -137,12 +137,9 @@ class TestCustomInit:
         assert req.method == "POST"
         assert req.path == "/api"
 
-    def test_custom_init_defaults_not_applied(self) -> None:
-        """自定义 __init__ 时，Declaration 不干预，未赋值的字段无值。
-
-        注：字段默认值当前由 Declaration.__init__ 应用，自定义 __init__
-        绕过了这一机制。未来可能由 metaclass 保证默认值始终应用。
-        """
+    def test_custom_init_defaults_applied(self) -> None:
+        """自定义 __init__ 时，Declaration 不干预 __init__ 逻辑，
+        但 __new__ 保证声明属性的默认值始终可用。"""
 
         class Thing(mutobj.Declaration):
             name: str = "default"
@@ -153,8 +150,4 @@ class TestCustomInit:
 
         thing = Thing("test")
         assert thing.name == "test"
-        try:
-            _ = thing.value
-            assert False, "Should have raised AttributeError"
-        except AttributeError:
-            pass
+        assert thing.value == 42  # __new__ 保证默认值可用

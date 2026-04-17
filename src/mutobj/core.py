@@ -742,8 +742,27 @@ class Declaration(metaclass=DeclarationMeta):
     用于定义接口声明，方法实现通过 @impl 装饰器在其他文件中提供
     """
 
+    def __new__(cls, *args: Any, **kwargs: Any) -> Declaration:
+        """创建实例并应用声明属性的默认值（不依赖 __init__ 调用链）"""
+        obj = super().__new__(cls)
+        # 遍历 MRO 中的所有类，为有默认值的属性设置初始值（最派生类优先）
+        applied: set[str] = set()
+        for klass in cls.__mro__:
+            if klass in _attribute_registry:
+                for attr_name in _attribute_registry[klass]:
+                    if attr_name in applied:
+                        continue
+                    desc = klass.__dict__.get(attr_name)
+                    if isinstance(desc, AttributeDescriptor) and desc.has_default:
+                        if desc.default_factory is not None:
+                            setattr(obj, attr_name, desc.default_factory())
+                        else:
+                            setattr(obj, attr_name, desc.default)
+                        applied.add(attr_name)
+        return obj
+
     def __init__(self, *args: Any, **kwargs: Any) -> None:
-        """初始化对象，支持通过位置参数和关键字参数设置属性，自动应用默认值"""
+        """初始化对象，支持通过位置参数和关键字参数设置属性"""
         # 位置参数映射到字段名（按字段声明顺序，基类在前）
         if args:
             fields = _get_ordered_fields(type(self))
@@ -761,25 +780,9 @@ class Declaration(metaclass=DeclarationMeta):
                     )
                 kwargs[name] = value
 
-        # 遍历 MRO 中的所有类，收集所有属性（最派生类优先）
-        applied: set[str] = set()
-        for klass in type(self).__mro__:
-            if klass in _attribute_registry:
-                for attr_name in _attribute_registry[klass]:
-                    if attr_name in applied:
-                        continue
-                    if attr_name in kwargs:
-                        setattr(self, attr_name, kwargs[attr_name])
-                        applied.add(attr_name)
-                    else:
-                        # 查找描述符上的默认值
-                        desc = klass.__dict__.get(attr_name)
-                        if isinstance(desc, AttributeDescriptor) and desc.has_default:
-                            if desc.default_factory is not None:
-                                setattr(self, attr_name, desc.default_factory())
-                            else:
-                                setattr(self, attr_name, desc.default)
-                            applied.add(attr_name)
+        # 应用关键字参数（覆盖 __new__ 中设置的默认值）
+        for attr_name, value in kwargs.items():
+            setattr(self, attr_name, value)
 
 
 # Extension 视图缓存
