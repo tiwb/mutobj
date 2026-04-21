@@ -851,7 +851,7 @@ class Extension(Generic[T]):
     """
 
     _target_class: type | None = None
-    _instance: Declaration | None = None
+    target: Declaration | None = None
 
     def __init_subclass__(cls, **kwargs: Any) -> None:
         super().__init_subclass__(**kwargs)
@@ -884,7 +884,7 @@ class Extension(Generic[T]):
         cache = _extension_cache[instance]
         if cls not in cache:
             ext = cls.__new__(cls)
-            ext._instance = instance
+            ext.target = instance
             # 处理 field 描述符：遍历 MRO 收集 Field 实例
             processed: set[str] = set()
             for klass in cls.__mro__:
@@ -921,23 +921,6 @@ class Extension(Generic[T]):
 
     def __init__(self) -> None:
         pass
-
-    def __getattr__(self, name: str) -> Any:
-        """代理访问目标实例的属性"""
-        if name.startswith("_"):
-            raise AttributeError(f"'{type(self).__name__}' object has no attribute '{name}'")
-        if self._instance is not None:
-            return getattr(self._instance, name)
-        raise AttributeError(f"Extension not bound to an instance")
-
-    def __setattr__(self, name: str, value: Any) -> None:
-        """设置属性"""
-        if name.startswith("_") or name in ("_instance", "_target_class"):
-            super().__setattr__(name, value)
-        elif self._instance is not None:
-            setattr(self._instance, name, value)
-        else:
-            super().__setattr__(name, value)
 
 
 def impl(

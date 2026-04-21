@@ -275,7 +275,7 @@ class TestDefaultsWithExtension:
 
         class ItemExt(mutobj.Extension[Item]):
             def get_label(self) -> str:
-                return self.label
+                return self.target.label
 
         item = Item()
         ext = ItemExt.get_or_create(item)

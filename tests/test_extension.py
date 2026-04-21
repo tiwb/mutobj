@@ -30,7 +30,7 @@ class TestExtensionBasic:
         ext = PersonExt.get_or_create(p)
 
         assert ext is not None
-        assert ext._instance is p
+        assert ext.target is p
 
     def test_extension_get_or_create_cached(self):
         """测试 get_or_create() 缓存"""
@@ -66,14 +66,14 @@ class TestExtensionBasic:
         assert ext._count == 2
 
     def test_extension_access_target_attributes(self):
-        """测试 Extension 访问目标实例属性"""
+        """测试 Extension 通过 instance 访问目标实例属性"""
         class Product(mutobj.Declaration):
             name: str
             price: float
 
         class ProductExt(mutobj.Extension[Product]):
             def get_display(self) -> str:
-                return f"{self.name}: ${self.price}"
+                return f"{self.target.name}: ${self.target.price}"
 
         p = Product(name="Widget", price=9.99)
         ext = ProductExt.get_or_create(p)
@@ -96,7 +96,7 @@ class TestExtensionInit:
 
             def __init__(self):
                 self._initialized = True
-                init_called.append(self._instance.name)
+                init_called.append(self.target.name)
 
         c = Config(name="test")
         ext = ConfigExt.get_or_create(c)
@@ -157,7 +157,7 @@ class TestExtensionWithImpl:
             _call_count: int = 0
 
             def _format_greeting(self) -> str:
-                return f"Hello, {self.name}!"
+                return f"Hello, {self.target.name}!"
 
         @mutobj.impl(Greeter.greet)
         def greet(self: Greeter) -> str:
@@ -451,3 +451,60 @@ class TestExtensionField:
         e1._attempts = 3
         assert e2._results == []
         assert e2._attempts == 0
+
+
+class TestExtensionSetattr:
+    """测试 Extension.__setattr__ 不代理到 Declaration"""
+
+    def test_public_attr_stays_on_extension(self):
+        class Host(mutobj.Declaration):
+            name: str = "host"
+
+        class HostExt(mutobj.Extension[Host]):
+            pass
+
+        h = Host()
+        ext = HostExt.get_or_create(h)
+        ext.callback = lambda: "ext"  # type: ignore
+        assert ext.callback() == "ext"  # type: ignore
+        assert not hasattr(h, "callback")
+
+    def test_overwrite_method_on_extension(self):
+        class Target(mutobj.Declaration):
+            name: str
+
+        class TargetExt(mutobj.Extension[Target]):
+            def transform(self) -> str:
+                return "default"
+
+        t = Target(name="t")
+        ext = TargetExt.get_or_create(t)
+        assert ext.transform() == "default"
+
+        ext.transform = lambda: "custom"  # type: ignore
+        assert ext.transform() == "custom"  # type: ignore
+        assert not hasattr(t, "transform")
+
+    def test_private_attr_stays_on_extension(self):
+        class Svc(mutobj.Declaration):
+            name: str
+
+        class SvcExt(mutobj.Extension[Svc]):
+            _state: int = 0
+
+        s = Svc(name="s")
+        ext = SvcExt.get_or_create(s)
+        ext._state = 42
+        assert ext._state == 42
+
+    def test_instance_is_public(self):
+        class Obj(mutobj.Declaration):
+            value: int = 10
+
+        class ObjExt(mutobj.Extension[Obj]):
+            pass
+
+        o = Obj()
+        ext = ObjExt.get_or_create(o)
+        assert ext.target is o
+        assert ext.target.value == 10
