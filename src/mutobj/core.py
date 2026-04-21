@@ -702,6 +702,49 @@ class DeclarationMeta(type):
         _registry_generation += 1
         return cls
 
+    def __setattr__(cls, name: str, value: Any) -> None:
+        if isinstance(value, AttributeDescriptor):
+            super().__setattr__(name, value)
+            return
+
+        desc: AttributeDescriptor | None = None
+        from_base = False
+        own = cls.__dict__.get(name)
+        if isinstance(own, AttributeDescriptor):
+            desc = own
+        else:
+            for base in cls.__mro__[1:]:
+                base_val = base.__dict__.get(name)
+                if isinstance(base_val, AttributeDescriptor):
+                    desc = base_val
+                    from_base = True
+                    break
+
+        if desc is None:
+            super().__setattr__(name, value)
+            return
+
+        if isinstance(value, _MUTABLE_TYPES):
+            type_name = type(value).__name__  # pyright: ignore[reportUnknownArgumentType]
+            raise TypeError(
+                f"Declaration '{cls.__name__}' attribute '{name}' uses mutable default "
+                f"value {type_name}. "
+                f"Use field(default_factory={type_name}) instead."
+            )
+        if isinstance(value, Field):
+            new_desc = AttributeDescriptor(
+                name, desc.annotation,
+                default=value.default,
+                default_factory=value.default_factory,
+            )
+        else:
+            new_desc = AttributeDescriptor(name, desc.annotation, default=value)
+        super().__setattr__(name, new_desc)
+
+        if from_base and cls in _attribute_registry and name not in _attribute_registry[cls]:
+            _attribute_registry[cls][name] = desc.annotation
+            _ordered_fields_cache.pop(cls, None)
+
 
 # 有序字段缓存：{类: [字段名, ...]}（基类在前，与 dataclass 一致）
 _ordered_fields_cache: dict[type, list[str]] = {}
