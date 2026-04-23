@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import importlib
 import weakref
-from typing import TypeVar, Generic, Callable, Any
+from typing import TypeVar, Generic, Callable, Any, Self
 
 __all__ = ["Declaration", "Extension", "impl", "unregister_module_impls", "field",
            "discover_subclasses", "get_registry_generation", "resolve_class",
@@ -741,7 +741,7 @@ class DeclarationMeta(type):
             new_desc = AttributeDescriptor(name, desc.annotation, default=value)
         super().__setattr__(name, new_desc)
 
-        if from_base and cls in _attribute_registry and name not in _attribute_registry[cls]:
+        if from_base and cls in _attribute_registry and name not in _attribute_registry[cls]:  # pyright: ignore[reportUnnecessaryContains]
             _attribute_registry[cls][name] = desc.annotation
             _ordered_fields_cache.pop(cls, None)
 
@@ -785,7 +785,7 @@ class Declaration(metaclass=DeclarationMeta):
     用于定义接口声明，方法实现通过 @impl 装饰器在其他文件中提供
     """
 
-    def __new__(cls, *args: Any, **kwargs: Any) -> Declaration:
+    def __new__(cls, *args: Any, **kwargs: Any) -> Self:
         """创建实例并应用声明属性的默认值（不依赖 __init__ 调用链）"""
         obj = super().__new__(cls)
         # 遍历 MRO 中的所有类，为有默认值的属性设置初始值（最派生类优先）
@@ -866,7 +866,7 @@ class Extension(Generic[T]):
                 return
 
     @classmethod
-    def get_or_create(cls, instance: T) -> Extension[T]:
+    def get_or_create(cls, instance: T) -> Self:
         """
         确保存在并返回 Extension 实例
 
@@ -904,7 +904,7 @@ class Extension(Generic[T]):
         return cache[cls]
 
     @classmethod
-    def get(cls, instance: T) -> Extension[T] | None:
+    def get(cls, instance: T) -> Self | None:
         """
         查询 Extension 实例，不存在返回 None
 
