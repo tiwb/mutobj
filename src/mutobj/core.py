@@ -54,6 +54,19 @@ _DECLARED_STATICMETHODS: str = "__mutobj_declared_staticmethods__"
 # 可变类型黑名单（直接赋值时报错，引导使用 field(default_factory=...)）
 _MUTABLE_TYPES = (list, dict, set, bytearray)
 
+# 不参与声明-实现机制的保留 dunder
+# 这些是 Python 类协议钩子，注册它们会破坏类机制（实例化、子类创建、描述符等）
+# 用户在 namespace 里显式定义的其他方法（含 __init__/__call__/_helper 等）一律走注册流程
+_MUTOBJ_RESERVED_DUNDERS = frozenset({
+    "__new__",                  # 实例化协议，Declaration 自己用
+    "__init_subclass__",        # 子类创建钩子
+    "__class_getitem__",        # 泛型语法 cls[T]
+    "__set_name__",             # 描述符协议
+    "__subclasshook__",         # ABC 子类判断
+    "__instancecheck__",        # isinstance 钩子
+    "__subclasscheck__",        # issubclass 钩子
+})
+
 
 class _MissingSentinel:
     """默认值缺失哨兵，区分"无默认值"和"默认值为 None" """
@@ -546,7 +559,7 @@ class DeclarationMeta(type):
         # 处理 property 声明（所有 @property 转为 mutobj.Property，保存原始函数为默认实现）
         prop_registry: dict[str, Property] = {}
         for prop_name, prop_value in namespace.items():
-            if prop_name.startswith("_"):
+            if prop_name in _MUTOBJ_RESERVED_DUNDERS:
                 continue
             if isinstance(prop_value, property):
                 declared_properties.add(prop_name)
@@ -571,7 +584,7 @@ class DeclarationMeta(type):
 
         # 处理 classmethod 声明（保存原始函数为默认实现）
         for method_name, method_value in namespace.items():
-            if method_name.startswith("_"):
+            if method_name in _MUTOBJ_RESERVED_DUNDERS:
                 continue
             if isinstance(method_value, classmethod):
                 func: Callable[..., Any] = method_value.__func__  # pyright: ignore[reportUnknownMemberType, reportUnknownVariableType]
@@ -585,7 +598,7 @@ class DeclarationMeta(type):
 
         # 处理 staticmethod 声明（保存原始函数为默认实现）
         for method_name, method_value in namespace.items():
-            if method_name.startswith("_"):
+            if method_name in _MUTOBJ_RESERVED_DUNDERS:
                 continue
             if isinstance(method_value, staticmethod):
                 func: Callable[..., Any] = method_value.__func__  # pyright: ignore[reportUnknownMemberType, reportUnknownVariableType]
@@ -599,7 +612,7 @@ class DeclarationMeta(type):
 
         # 处理普通方法声明（保存原始函数为默认实现，不替换为 stub）
         for method_name, method_value in namespace.items():
-            if method_name.startswith("_"):
+            if method_name in _MUTOBJ_RESERVED_DUNDERS:
                 continue
             if callable(method_value) and not isinstance(method_value, (classmethod, staticmethod, property)):
                 declared_methods.add(method_name)
@@ -988,10 +1001,22 @@ def impl(
                 raise ValueError(f"Cannot determine class for method {method}")
 
             # 查找目标类（使用 _class_registry）
-            for cls in _class_registry.values():
-                if cls.__name__ == class_name:
-                    target_cls = cls
-                    break
+            candidates = [
+                cls for cls in _class_registry.values()
+                if cls.__name__ == class_name
+            ]
+            if len(candidates) > 1:
+                paths = [f"{c.__module__}.{c.__qualname__}" for c in candidates]
+                raise ValueError(
+                    f"@impl({method_name!r}): ambiguous target — multiple "
+                    f"Declaration classes named {class_name!r} are registered: "
+                    f"{paths}. This usually means the method does not have "
+                    f"__mutobj_class__ set; if it's a dunder method declared "
+                    f"by the user, ensure it's defined in the class body "
+                    f"(mutobj should auto-tag it)."
+                )
+            elif len(candidates) == 1:
+                target_cls = candidates[0]
 
             if target_cls is None:
                 # 尝试从方法的 __globals__ 中查找
