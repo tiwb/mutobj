@@ -63,5 +63,6 @@ warn_unused_configs = true
 [tool.pyright]
 pythonVersion = "3.11"
 include = ["src"]
+extraPaths = ["src"]
 typeCheckingMode = "strict"
 reportFunctionMemberAccess = false
