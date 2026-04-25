@@ -129,3 +129,23 @@ class TestImplErrors:
         @mutobj.impl(Widget.declared_method)
         def declared_impl(self: Widget) -> None:
             pass
+
+    def test_impl_refuses_to_pollute_declaration_base(self):
+        """子类未声明 __init__ 桩时, @impl(Cls.__init__) 反推到 Declaration —
+        必须报错而非静默替换 Declaration.__init__ 污染所有子类。"""
+        import pytest
+
+        class Box(mutobj.Declaration):
+            width: float = 0.0
+
+        # Box 未声明 __init__,Box.__init__ 实际是 Declaration.__init__
+        with pytest.raises(ValueError, match="refusing to register on Declaration"):
+            @mutobj.impl(Box.__init__)
+            def _box_init(self: Box, w: float) -> None:
+                self.width = w
+
+        # 防污染生效后,其他 Declaration 子类的 __init__ 不受影响
+        class Other(mutobj.Declaration):
+            name: str = ""
+
+        assert Other(name="ok").name == "ok"

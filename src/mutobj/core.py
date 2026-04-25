@@ -67,6 +67,14 @@ _MUTOBJ_RESERVED_DUNDERS = frozenset({
     "__subclasscheck__",        # issubclass 钩子
 })
 
+# Declaration 基类上允许被标准注册流程处理的"用户钩子"白名单。
+# 这些钩子默认 no-op,签名固定,可被 @impl 追加式覆盖,且每个子类应有独立委托。
+# Declaration 自身的 __init__ / __new__ 等框架方法不进白名单 — 那些不是 hook,
+# 而是构造协议的核心,不能被自动委托替换。
+_DECLARATION_USER_HOOKS = frozenset({
+    "__post_init__",
+})
+
 
 class _MissingSentinel:
     """默认值缺失哨兵，区分"无默认值"和"默认值为 None" """
@@ -480,8 +488,19 @@ class DeclarationMeta(type):
         # 创建类
         cls = super().__new__(mcs, name, bases, namespace)
 
-        # 跳过 Declaration 基类本身
+        # Declaration 基类本身：只把白名单中的"用户钩子"登记为已声明方法,
+        # __init__ / __new__ 等框架基础设施不进 _DECLARED_METHODS,避免被自动委托替换
         if name == "Declaration" and not bases:
+            declared = set()
+            for hook_name in _DECLARATION_USER_HOOKS:
+                hook = namespace.get(hook_name)
+                if callable(hook):
+                    hook.__mutobj_class__ = cls
+                    _impl_chain.setdefault((cls, hook_name), []).append(
+                        (hook, "__default__", 0)
+                    )
+                    declared.add(hook_name)
+            setattr(cls, _DECLARED_METHODS, declared)
             return cls
 
         # 获取类型注解
@@ -635,7 +654,7 @@ class DeclarationMeta(type):
         # 子类继承声明方法时，自动创建独立链条
         # 解决多子类继承同一桩方法后 @impl 冲突问题
         for base in cls.__mro__[1:]:
-            if base is cls or base.__name__ == "Declaration" or base is object:  # pyright: ignore[reportUnnecessaryComparison]
+            if base is cls or base is object:  # pyright: ignore[reportUnnecessaryComparison]
                 continue
 
             # 继承普通方法
@@ -723,6 +742,18 @@ class DeclarationMeta(type):
         _class_registry[key] = cls
         _registry_generation += 1
         return cls
+
+    def __call__(cls: type[T], *args: Any, **kwargs: Any) -> T:  # type: ignore[misc]
+        """构造流程: __new__ → __init__ → __post_init__。
+
+        __post_init__ 由元类强制调用,不依赖 __init__ 调 super(),
+        让用户在 @impl(Cls.__init__) 自定义构造时无需关心 hook 触发。
+        """
+        obj = cls.__new__(cls, *args, **kwargs)
+        if isinstance(obj, cls):
+            cls.__init__(obj, *args, **kwargs)
+            obj.__post_init__()  # type: ignore[attr-defined]
+        return obj
 
     def __setattr__(cls, name: str, value: Any) -> None:
         if isinstance(value, AttributeDescriptor):
@@ -873,9 +904,15 @@ class Declaration(metaclass=DeclarationMeta):
                 )
             setattr(self, attr_name, value)
 
-        post_init = getattr(self, "__post_init__", None)
-        if callable(post_init):
-            post_init()
+    def __post_init__(self) -> None:
+        """构造完成后自动调用，子类可覆盖做派生计算。
+
+        子类既可在类体内重新声明 ``def __post_init__(self) -> None: ...``
+        把它作为自身覆盖链入口（推荐，IDE 可见），也可以省略声明、直接
+        ``@mutobj.impl(MyClass.__post_init__)`` 注入实现 —— 元类会为每个
+        子类生成独立的委托，覆盖不会污染兄弟类或基类。
+        """
+        ...
 
 
 # Extension 视图缓存
@@ -1062,6 +1099,20 @@ def impl(
 
         if target_cls is None:
             raise ValueError(f"Cannot find class for method {method_name}")
+
+        # 防污染: 除白名单钩子外, 不允许 @impl 直接挂到 Declaration 基类。
+        # 触发场景: 子类未声明桩, @impl(MyCls.some_method) 反推到 Declaration —
+        # 此时若放行,会替换所有 Declaration 子类的该方法 (典型如 __init__ / __new__)。
+        if target_cls is Declaration and method_name not in _DECLARATION_USER_HOOKS:
+            raise ValueError(
+                f"@impl({method_name!r}): refusing to register on Declaration base "
+                f"class. The method was resolved to Declaration because the "
+                f"subclass does not declare its own {method_name!r}. Add a stub "
+                f"on the subclass first, e.g.\n"
+                f"    class MySubclass(mutobj.Declaration):\n"
+                f"        def {method_name}(self, ...) -> ...: ...\n"
+                f"then re-run @impl(MySubclass.{method_name})."
+            )
 
         # 检查方法是否存在于类上
         if not hasattr(target_cls, method_name):
