@@ -56,6 +56,32 @@ user = User(name="Alice", age=25)
 print(user.greet())  # "Hello, I'm Alice!"
 ```
 
+## Declaration 构造
+
+简单字段可直接用声明属性参与构造：
+
+```python
+class Request(mutobj.Declaration):
+    method: str = "GET"
+    path: str = "/"
+```
+
+当构造阶段需要派生字段或后处理时，推荐声明 `__post_init__`，并把实现放到 `@mutobj.impl(...)`：
+
+```python
+class JSONResponse(mutobj.Declaration):
+    content: dict[str, object]
+    summary: str = mutobj.field(default="", init=False)
+
+    def __post_init__(self) -> None: ...
+
+@mutobj.impl(JSONResponse.__post_init__)
+def _json_response_post_init(self: JSONResponse) -> None:
+    self.summary = f"keys={sorted(self.content)}"
+```
+
+`field(init=False)` 表示该字段不接受构造参数，只使用默认值或在 `__post_init__` 中赋值。
+
 ## Extension 机制
 
 为类添加私有状态：
