@@ -7,10 +7,11 @@ mutobj 核心模块
 from __future__ import annotations
 
 import importlib
+import sys
 import weakref
 from typing import TypeVar, Generic, Callable, Any, Self
 
-__all__ = ["Declaration", "Extension", "impl", "unregister_module_impls", "field", "MISSING",
+__all__ = ["Declaration", "Extension", "impl", "call_super_impl", "unregister_module_impls", "field", "MISSING",
            "discover_subclasses", "get_registry_generation", "resolve_class",
            "extensions", "extension_types"]
 
@@ -1010,6 +1011,112 @@ class Extension(Generic[T]):
         pass
 
 
+def _resolve_impl_key(
+    method: Any,
+) -> tuple[type, str]:
+    """将 method 句柄解析为 (target_cls, impl_key)。
+
+    支持 property getter/setter placeholder、普通方法、classmethod、staticmethod。
+    被 @impl 装饰器和 call_super_impl 共用，保证两者对同一 method 的解析一致。
+
+    Raises:
+        TypeError: method 不是合法的方法句柄
+        ValueError: 无法定位目标类
+    """
+    # property getter
+    if isinstance(method, _PropertyGetterPlaceholder):
+        prop = method._prop  # pyright: ignore[reportPrivateUsage]
+        return prop.owner_cls, f"{prop.name}.getter"
+
+    # property setter
+    if isinstance(method, _PropertySetterPlaceholder):
+        prop = method._prop  # pyright: ignore[reportPrivateUsage]
+        return prop.owner_cls, f"{prop.name}.setter"
+
+    if not callable(method):
+        raise TypeError(f"Expected a callable or property accessor, got {type(method)}")
+
+    method_name = getattr(method, "__name__", "")
+
+    # 优先使用存储的类引用
+    target_cls = getattr(method, "__mutobj_class__", None)
+
+    if target_cls is None:
+        qualname = getattr(method, "__qualname__", "")
+        if "." in qualname:
+            class_name = qualname.rsplit(".", 1)[0]
+        else:
+            raise ValueError(f"Cannot determine class for method {method}")
+
+        candidates = [
+            cls for cls in _class_registry.values()
+            if cls.__name__ == class_name
+        ]
+        if len(candidates) > 1:
+            paths = [f"{c.__module__}.{c.__qualname__}" for c in candidates]
+            raise ValueError(
+                f"@impl({method_name!r}): ambiguous target — multiple "
+                f"Declaration classes named {class_name!r} are registered: "
+                f"{paths}. This usually means the method does not have "
+                f"__mutobj_class__ set; if it's a dunder method declared "
+                f"by the user, ensure it's defined in the class body "
+                f"(mutobj should auto-tag it)."
+            )
+        elif len(candidates) == 1:
+            target_cls = candidates[0]
+
+        if target_cls is None and hasattr(method, "__globals__"):
+            target_cls = method.__globals__.get(class_name)
+
+    if target_cls is None:
+        raise ValueError(f"Cannot find class for method {method_name}")
+
+    return target_cls, method_name
+
+
+def call_super_impl(method: Any, *args: Any, **kwargs: Any) -> Any:
+    """调用 @impl 链中当前实现的上一级实现。
+
+    必须从 @impl 函数体内调用。框架通过调用栈定位调用方所在模块，
+    在 method 对应的覆盖链中找到当前条目，返回执行链中前一条记录的结果。
+
+    Args:
+        method: 被覆盖的方法句柄（如 ``JinaSearchImpl.search``、property 的 getter/setter）
+        *args, **kwargs: 转发给上一级实现的参数（首参一般是 self/cls）
+
+    Raises:
+        NotImplementedError: 当前实现已是链底，无上级可调
+        RuntimeError: 调用方不在 method 的 @impl 链中（如从普通函数 / 测试代码调用）
+
+    示例::
+
+        @mutagent.impl(JinaSearchImpl.search)
+        async def _jina_search(self, query, max_results=5):
+            try:
+                return await mutobj.call_super_impl(
+                    JinaSearchImpl.search, self, query, max_results
+                )
+            except RuntimeError as e:
+                raise _enrich_error(e) from e
+    """
+    cls, key = _resolve_impl_key(method)
+    caller_module = sys._getframe(1).f_globals.get("__name__", "")
+    chain = _impl_chain.get((cls, key), [])
+    for i, (_fn, mod, _seq) in enumerate(chain):
+        if mod == caller_module:
+            # 跳过链底的 __default__ 桩条目（调用它只会抛桌NotImplementedError）
+            if i == 0 or chain[i - 1][1] == "__default__":
+                raise NotImplementedError(
+                    f"No super implementation for {cls.__name__}.{key} "
+                    f"below module {mod!r}"
+                )
+            return chain[i - 1][0](*args, **kwargs)
+    raise RuntimeError(
+        f"call_super_impl({cls.__name__}.{key}) must be called from within "
+        f"an @impl function for that method (caller module: {caller_module!r})"
+    )
+
+
 def impl(
     method: Callable[..., Any] | _PropertyGetterPlaceholder | _PropertySetterPlaceholder,
 ) -> Callable[[Callable[..., Any]], Callable[..., Any]]:
@@ -1033,9 +1140,8 @@ def impl(
 
         # 处理 property getter
         if isinstance(method, _PropertyGetterPlaceholder):
+            target_cls, impl_key = _resolve_impl_key(method)
             prop = method._prop  # pyright: ignore[reportPrivateUsage]
-            target_cls = prop.owner_cls
-            impl_key = f"{prop.name}.getter"
 
             became_top = _register_to_chain(
                 target_cls, impl_key, func, source_module
@@ -1046,9 +1152,8 @@ def impl(
 
         # 处理 property setter
         if isinstance(method, _PropertySetterPlaceholder):
+            target_cls, impl_key = _resolve_impl_key(method)
             prop = method._prop  # pyright: ignore[reportPrivateUsage]
-            target_cls = prop.owner_cls
-            impl_key = f"{prop.name}.setter"
 
             became_top = _register_to_chain(
                 target_cls, impl_key, func, source_module
@@ -1057,48 +1162,8 @@ def impl(
                 prop._fset = func  # pyright: ignore[reportPrivateUsage]
             return func
 
-        # 获取目标类和方法名
-        if not callable(method):
-            raise TypeError(f"Expected a callable, got {type(method)}")
-
-        method_name = getattr(method, "__name__", "")
-
-        # 优先使用存储的类引用
-        target_cls = getattr(method, "__mutobj_class__", None)
-
-        if target_cls is None:
-            # 从方法获取所属类
-            qualname = getattr(method, "__qualname__", "")
-            if "." in qualname:
-                class_name = qualname.rsplit(".", 1)[0]
-            else:
-                raise ValueError(f"Cannot determine class for method {method}")
-
-            # 查找目标类（使用 _class_registry）
-            candidates = [
-                cls for cls in _class_registry.values()
-                if cls.__name__ == class_name
-            ]
-            if len(candidates) > 1:
-                paths = [f"{c.__module__}.{c.__qualname__}" for c in candidates]
-                raise ValueError(
-                    f"@impl({method_name!r}): ambiguous target — multiple "
-                    f"Declaration classes named {class_name!r} are registered: "
-                    f"{paths}. This usually means the method does not have "
-                    f"__mutobj_class__ set; if it's a dunder method declared "
-                    f"by the user, ensure it's defined in the class body "
-                    f"(mutobj should auto-tag it)."
-                )
-            elif len(candidates) == 1:
-                target_cls = candidates[0]
-
-            if target_cls is None:
-                # 尝试从方法的 __globals__ 中查找
-                if hasattr(method, "__globals__"):
-                    target_cls = method.__globals__.get(class_name)
-
-        if target_cls is None:
-            raise ValueError(f"Cannot find class for method {method_name}")
+        # 普通方法 / classmethod / staticmethod —— 复用 _resolve_impl_key
+        target_cls, method_name = _resolve_impl_key(method)
 
         # 防污染: 除白名单钩子外, 不允许 @impl 直接挂到 Declaration 基类。
         # 触发场景: 子类未声明桩, @impl(MyCls.some_method) 反推到 Declaration —
