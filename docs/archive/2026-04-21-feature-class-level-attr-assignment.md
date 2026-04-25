@@ -79,14 +79,14 @@ def __setattr__(cls, name: str, value: Any) -> None:
 
 ## 测试用例
 
-- [ ] **基类运行时赋值** — `Base.attr = new_value` 后，新实例 `Base()` 拿到新默认值
-- [ ] **子类运行时赋值** — `Sub.attr = new_value`（描述符在父类），子类创建新描述符，父类不受影响
-- [ ] **已有实例不受影响** — 赋值前创建的实例保持原值
-- [ ] **Field 对象赋值** — `Base.attr = field(default_factory=list)` 正确创建带 factory 的描述符
-- [ ] **可变类型报错** — `Base.attr = []` 抛出 `TypeError`，提示使用 `field(default_factory=list)`
-- [ ] **非声明属性放行** — `MyDecl._internal = 1` 或 `MyDecl.some_new = "x"` 正常赋值，不创建描述符
-- [ ] **_attribute_registry 同步** — 子类首次覆盖后，`_attribute_registry[Sub]` 包含该属性
-- [ ] **描述符赋值放行** — 内部 `setattr(cls, name, AttributeDescriptor(...))` 不被拦截
+- [x] **基类运行时赋值** — `Base.attr = new_value` 后，新实例 `Base()` 拿到新默认值
+- [x] **子类运行时赋值** — `Sub.attr = new_value`（描述符在父类），子类创建新描述符，父类不受影响
+- [x] **已有实例不受影响** — 赋值前创建的实例保持原值
+- [x] **Field 对象赋值** — `Base.attr = field(default_factory=list)` 正确创建带 factory 的描述符
+- [x] **可变类型报错** — `Base.attr = []` 抛出 `TypeError`，提示使用 `field(default_factory=list)`
+- [x] **非声明属性放行** — `MyDecl._internal = 1` 或 `MyDecl.some_new = "x"` 正常赋值，不创建描述符
+- [x] **_attribute_registry 同步** — 子类首次覆盖后，`_attribute_registry[Sub]` 包含该属性
+- [x] **描述符赋值放行** — 内部 `setattr(cls, name, AttributeDescriptor(...))` 不被拦截
 
 ## 实施步骤清单
 
