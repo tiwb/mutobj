@@ -10,7 +10,7 @@ import importlib
 import weakref
 from typing import TypeVar, Generic, Callable, Any, Self
 
-__all__ = ["Declaration", "Extension", "impl", "unregister_module_impls", "field",
+__all__ = ["Declaration", "Extension", "impl", "unregister_module_impls", "field", "MISSING",
            "discover_subclasses", "get_registry_generation", "resolve_class",
            "extensions", "extension_types"]
 
@@ -84,40 +84,45 @@ class _MissingSentinel:
         return False
 
 
-_MISSING: Any = _MissingSentinel()
+MISSING: Any = _MissingSentinel()
+_MISSING: Any = MISSING
 
 
 class Field:
     """属性默认值描述，由 field() 创建"""
 
-    __slots__ = ("default", "default_factory")
+    __slots__ = ("default", "default_factory", "init")
 
     def __init__(
         self,
         default: Any = _MISSING,
         default_factory: Callable[[], Any] | None = None,
+        init: bool = True,
     ) -> None:
         if default is not _MISSING and default_factory is not None:
             raise TypeError("cannot specify both default and default_factory")
         self.default = default
         self.default_factory = default_factory
+        self.init = init
 
 
 def field(
     *,
     default: Any = _MISSING,
     default_factory: Callable[[], Any] | None = None,
+    init: bool = True,
 ) -> Any:
     """声明属性的默认值
 
     Args:
         default: 不可变默认值
         default_factory: 可变默认值的工厂函数，每次实例化时调用
+        init: 是否参与构造参数绑定
 
     Returns:
         Field 哨兵对象（DeclarationMeta 会识别并提取）
     """
-    return Field(default=default, default_factory=default_factory)
+    return Field(default=default, default_factory=default_factory, init=init)
 
 
 def _make_stub_method(name: str, cls: type) -> Callable[..., Any]:
@@ -259,12 +264,14 @@ class AttributeDescriptor:
         annotation: Any,
         default: Any = _MISSING,
         default_factory: Callable[[], Any] | None = None,
+        init: bool = True,
     ):
         self.name = name
         self.annotation = annotation
         self.storage_name = f"_mutobj_attr_{name}"
         self.default = default
         self.default_factory = default_factory
+        self.init = init
 
     @property
     def has_default(self) -> bool:
@@ -491,6 +498,7 @@ class DeclarationMeta(type):
                     attr_name, attr_type,
                     default=value.default,
                     default_factory=value.default_factory,
+                    init=value.init,
                 )
             elif attr_name in namespace and not isinstance(value, AttributeDescriptor):
                 if callable(value) or isinstance(value, property):
@@ -541,6 +549,7 @@ class DeclarationMeta(type):
                     attr_name, parent_desc.annotation,
                     default=value.default,
                     default_factory=value.default_factory,
+                    init=value.init,
                 )
             elif isinstance(value, _MUTABLE_TYPES):
                 type_name = type(value).__name__  # pyright: ignore[reportUnknownArgumentType]
@@ -749,6 +758,7 @@ class DeclarationMeta(type):
                 name, desc.annotation,
                 default=value.default,
                 default_factory=value.default_factory,
+                init=value.init,
             )
         else:
             new_desc = AttributeDescriptor(name, desc.annotation, default=value)
@@ -791,6 +801,24 @@ def _get_ordered_fields(cls: type) -> list[str]:
     return fields
 
 
+def _get_attribute_descriptor(cls: type, attr_name: str) -> AttributeDescriptor | None:
+    """沿 MRO 查找字段描述符，优先返回最派生类定义。"""
+    for klass in cls.__mro__:
+        desc = klass.__dict__.get(attr_name)
+        if isinstance(desc, AttributeDescriptor):
+            return desc
+    return None
+
+
+def _get_init_fields(cls: type) -> list[str]:
+    """获取参与构造参数绑定的字段列表。"""
+    return [
+        attr_name
+        for attr_name in _get_ordered_fields(cls)
+        if (desc := _get_attribute_descriptor(cls, attr_name)) is not None and desc.init
+    ]
+
+
 class Declaration(metaclass=DeclarationMeta):
     """
     mutobj 声明类的基类
@@ -821,7 +849,7 @@ class Declaration(metaclass=DeclarationMeta):
         """初始化对象，支持通过位置参数和关键字参数设置属性"""
         # 位置参数映射到字段名（按字段声明顺序，基类在前）
         if args:
-            fields = _get_ordered_fields(type(self))
+            fields = _get_init_fields(type(self))
             if len(args) > len(fields):
                 raise TypeError(
                     f"{type(self).__name__}() takes {len(fields)} positional "
@@ -838,7 +866,16 @@ class Declaration(metaclass=DeclarationMeta):
 
         # 应用关键字参数（覆盖 __new__ 中设置的默认值）
         for attr_name, value in kwargs.items():
+            desc = _get_attribute_descriptor(type(self), attr_name)
+            if isinstance(desc, AttributeDescriptor) and not desc.init:
+                raise TypeError(
+                    f"{type(self).__name__}() got an unexpected keyword argument '{attr_name}'"
+                )
             setattr(self, attr_name, value)
+
+        post_init = getattr(self, "__post_init__", None)
+        if callable(post_init):
+            post_init()
 
 
 # Extension 视图缓存
