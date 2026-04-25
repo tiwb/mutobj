@@ -77,7 +77,7 @@ class Config(mutobj.Declaration):
 - `field(init=False)` 的字段在构造时只用默认值，不接受 `__init__` 参数
 - 子类可用同名注解（或同名等号赋值）覆盖父类默认值
 
-**`__post_init__`**：所有字段绑定完后自动调用，做派生计算。
+**`__post_init__`**：所有字段绑定完后由元类**强制**调用，做派生计算。即使用户自定义 `__init__` 没调 `super().__init__()`，`__post_init__` 也会触发。
 
 ```python
 class Box(mutobj.Declaration):
@@ -88,6 +88,16 @@ class Box(mutobj.Declaration):
     def __post_init__(self) -> None:
         self.area = self.width * self.height
 ```
+
+`__post_init__` 也可以通过 `@impl` 在实现文件里覆盖，**无需在 Declaration 上写桩**：
+
+```python
+@mutobj.impl(Box.__post_init__)
+def _post_init(self: Box) -> None:
+    self.area = self.width * self.height
+```
+
+这条规则对 `__post_init__` 是特例（用户钩子白名单）。`@impl(Cls.__init__)` 等其他 dunder 仍要求 Declaration 上有对应声明，避免静默污染基类。
 
 ---
 
@@ -106,6 +116,31 @@ def greet(self: User) -> str:
 ```python
 mutobj.unregister_module_impls("mypkg._user_impl")
 ```
+
+### 调用上一级实现：`call_super_impl`
+
+在 `@impl` 函数体内，可用 `mutobj.call_super_impl(method, *args, **kwargs)` 显式调用覆盖链上**前一层**实现（类似 `super().method()` 之于继承），用于做装饰、追加日志、参数预处理等：
+
+```python
+# base_impl.py
+@mutobj.impl(Service.process)
+def _base(self: Service, x: int) -> int:
+    return x * 2
+
+# logging_impl.py —— 后注册，包一层日志
+@mutobj.impl(Service.process)
+def _logged(self: Service, x: int) -> int:
+    result = mutobj.call_super_impl(Service.process, x)
+    logger.info("process(%s) = %s", x, result)
+    return result
+```
+
+**规则**：
+
+- 通过 `sys._getframe` 自动定位 caller 模块，无需传 `__name__`
+- 链底（上一级是 Declaration 自身桩 `...`）抛 `NotImplementedError`
+- caller 不在该方法的覆盖链中抛 `RuntimeError`
+- 支持普通方法、`async`、`property` getter/setter、`classmethod`、`staticmethod`
 
 ---
 
