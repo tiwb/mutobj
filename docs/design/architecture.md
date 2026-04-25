@@ -118,16 +118,16 @@ Declaration 字段和 Extension 字段在**概念层**是不同的东西：
 
 ### 当前实现
 
-Extension 机制已完成重新设计（详见 `docs/specifications/feature-extension-redesign.md`）：
+Extension 机制已完成重新设计（详见 `docs/archive/2026-03-08-feature-extension-redesign.md`）：
 
 - `Extension[T]` 声明时自动注册到目标 Declaration 类型的注册表（`__init_subclass__` + `__orig_bases__`）
 - `ExtType.get_or_create(instance)`：确保存在并返回（最常用）
 - `ExtType.get(instance)`：查询，不存在返回 None
 - `mutobj.extensions(instance, filter_type)`：枚举实例上已创建的 Extension
 - `mutobj.extension_types(decl_class, filter_type)`：查询类注册了哪些 Extension 类型，沿 MRO 收集
-- `__init__` 中 `self._instance` 和 field 值均已可用
+- `__init__` 中 `self.target` 和 field 值均已可用
 - 支持 `field(default_factory=...)` 声明可变默认值
-- `__getattr__`/`__setattr__` 代理对目标实例的公开属性访问
+- 通过 `self.target` 显式访问宿主 Declaration 实例（不做属性代理 —— 避免命名冲突和隐式行为）
 
 ### 已实现的演进方向
 
