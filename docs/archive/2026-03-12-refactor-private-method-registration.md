@@ -1,6 +1,6 @@
 # Declaration 私有方法注册 设计规范
 
-**状态**：📝 设计中
+**状态**：✅ 已完成
 **日期**：2026-03-12
 **类型**：重构
 
@@ -45,6 +45,23 @@
 ### 方向 C：其他
 
 待讨论。
+
+## 实施记录
+
+本重构最终采用**方向 A 的变体**：以白名单方式（`_MUTOBJ_RESERVED_DUNDERS`）只跳过会破坏 Python 类协议的少数 dunder（`__new__`、`__init_subclass__`、`__class_getitem__`、`__set_name__` 等），其余所有方法（含 `__init__`、`__repr__`、`_helper` 等）一律进入注册流程。
+
+实施由 commit `e099b0b`（2026-04-24，"fix: @impl 在 dunder 方法上目标类错配"）完成。该 commit 起因是修复 `@impl` 在 dunder 方法上的 fallback 错配 bug，顺势完成了本重构的目标。
+
+### 当前代码状态
+
+- `src/mutobj/core.py:60` — 引入 `_MUTOBJ_RESERVED_DUNDERS` 白名单
+- `src/mutobj/core.py:571,596,610,624` — property/classmethod/staticmethod/普通方法注册改为白名单过滤
+- `src/mutobj/core.py:531` — 唯一保留的 `startswith("_")` 在「无注解属性覆盖检测」中（不属于方法注册链，与本重构无关）
+- `src/mutobj/core.py:832,840` — Extension 内部过滤保留（spec 原本就标注「保留」）
+
+### 关联
+
+- `bugfix-impl-dunder-target-misbinding.md` — 实施所在的工单（含详细分层方案 Layer A/B 与 219 行 dunder 测试）
 
 ## 关键参考
 
