@@ -6,12 +6,15 @@ mutobj 核心模块
 
 from __future__ import annotations
 
+import dis
 import importlib
 import sys
+import warnings
 import weakref
 from typing import TypeVar, Generic, Callable, Any, Self
 
-__all__ = ["Declaration", "Extension", "impl", "call_super_impl", "unregister_module_impls", "field", "MISSING",
+__all__ = ["Declaration", "Extension", "impl", "impl_call_super", "call_super_impl", "impl_has",
+           "impl_has_override", "impl_chain", "unregister_module_impls", "field", "MISSING",
            "discover_subclasses", "get_registry_generation", "resolve_class",
            "extensions", "extension_types"]
 
@@ -144,6 +147,7 @@ def _make_stub_method(name: str, cls: type) -> Callable[..., Any]:
     stub.__name__ = name
     stub.__qualname__ = f"{cls.__name__}.{name}"
     stub.__mutobj_class__ = cls
+    stub.__mutobj_is_stub__ = True
     return stub
 
 
@@ -158,6 +162,7 @@ def _make_stub_classmethod(name: str, cls: type) -> classmethod[Any, ..., Any]:
     stub.__qualname__ = f"{cls.__name__}.{name}"
     stub.__mutobj_class__ = cls
     stub.__mutobj_is_classmethod__ = True
+    stub.__mutobj_is_stub__ = True
     return classmethod(stub)
 
 
@@ -172,6 +177,7 @@ def _make_stub_staticmethod(name: str, cls: type) -> staticmethod[Any, Any]:
     stub.__qualname__ = f"{cls.__name__}.{name}"
     stub.__mutobj_class__ = cls
     stub.__mutobj_is_staticmethod__ = True
+    stub.__mutobj_is_stub__ = True
     return staticmethod(stub)
 
 
@@ -286,6 +292,22 @@ class AttributeDescriptor:
     def has_default(self) -> bool:
         """是否有默认值"""
         return self.default is not _MISSING or self.default_factory is not None
+
+    def get_default(self) -> Any:
+        """返回声明上的默认值元信息。"""
+        if self.default is not _MISSING:
+            return self.default
+        if self.default_factory is not None:
+            return self.default_factory
+        raise ValueError(f"Attribute '{self.name}' has no default")
+
+    def make_default(self) -> Any:
+        """返回实例化时应应用的默认值。"""
+        if self.default_factory is not None:
+            return self.default_factory()
+        if self.default is not _MISSING:
+            return self.default
+        raise ValueError(f"Attribute '{self.name}' has no default")
 
     def __get__(self, obj: Any, objtype: type | None = None) -> Any:
         if obj is None:
@@ -671,6 +693,9 @@ class DeclarationMeta(type):
                     delegate.__name__ = mn
                     delegate.__qualname__ = f"{cls.__name__}.{mn}"
                     delegate.__mutobj_class__ = cls
+                    delegate.__mutobj_is_delegate__ = True
+                    delegate.__mutobj_delegate_base__ = b
+                    delegate.__mutobj_delegate_name__ = mn
                     return delegate
                 delegate = _make_delegate(base, method_name)
                 _impl_chain[(cls, method_name)] = [
@@ -697,6 +722,9 @@ class DeclarationMeta(type):
                     delegate.__qualname__ = f"{cls.__name__}.{mn}"
                     delegate.__mutobj_class__ = cls
                     delegate.__mutobj_is_classmethod__ = True
+                    delegate.__mutobj_is_delegate__ = True
+                    delegate.__mutobj_delegate_base__ = b
+                    delegate.__mutobj_delegate_name__ = mn
                     return delegate
                 delegate = _make_cm_delegate(base, method_name)
                 _impl_chain[(cls, method_name)] = [
@@ -718,6 +746,9 @@ class DeclarationMeta(type):
                     delegate.__qualname__ = f"{cls.__name__}.{mn}"
                     delegate.__mutobj_class__ = cls
                     delegate.__mutobj_is_staticmethod__ = True
+                    delegate.__mutobj_is_delegate__ = True
+                    delegate.__mutobj_delegate_base__ = b
+                    delegate.__mutobj_delegate_name__ = mn
                     return delegate
                 delegate = _make_sm_delegate(base, method_name)
                 _impl_chain[(cls, method_name)] = [
@@ -1074,7 +1105,83 @@ def _resolve_impl_key(
     return target_cls, method_name
 
 
-def call_super_impl(method: Any, *args: Any, **kwargs: Any) -> Any:
+def _meaningful_instructions(func: Callable[..., Any]) -> list[dis.Instruction]:
+    return [
+        ins for ins in dis.get_instructions(func)
+        if ins.opname not in {"RESUME", "CACHE", "EXTENDED_ARG", "NOP", "COPY_FREE_VARS"}
+    ]
+
+
+def _looks_like_notimplemented_stub(func: Callable[..., Any]) -> bool:
+    instructions = _meaningful_instructions(func)
+    if not instructions or instructions[-1].opname != "RAISE_VARARGS":
+        return False
+    return any(
+        ins.opname in {"LOAD_GLOBAL", "LOAD_NAME"} and ins.argval == "NotImplementedError"
+        for ins in instructions
+    )
+
+
+def _default_impl_has_behavior(
+    func: Callable[..., Any],
+    *,
+    seen: set[tuple[type, str]] | None = None,
+) -> bool:
+    if getattr(func, "__mutobj_is_stub__", False):
+        return False
+    if getattr(func, "__mutobj_is_delegate__", False):
+        base = getattr(func, "__mutobj_delegate_base__", None)
+        name = getattr(func, "__mutobj_delegate_name__", None)
+        if isinstance(base, type) and isinstance(name, str):
+            visit_key = (base, name)
+            if seen is None:
+                seen = set()
+            if visit_key in seen:
+                return False
+            seen.add(visit_key)
+            chain = _impl_chain.get(visit_key, [])
+            if not chain:
+                return False
+            top_func, top_module, _seq = chain[-1]
+            if top_module != "__default__":
+                return True
+            return _default_impl_has_behavior(top_func, seen=seen)
+    if _looks_like_notimplemented_stub(func):
+        return False
+    return True
+
+
+def impl_has(method: Any) -> bool:
+    """判断声明方法当前是否有真实可执行实现。"""
+    cls, key = _resolve_impl_key(method)
+    chain = _impl_chain.get((cls, key), [])
+    if not chain:
+        return False
+    top_func, top_module, _seq = chain[-1]
+    if top_module != "__default__":
+        return True
+    return _default_impl_has_behavior(top_func)
+
+
+def impl_has_override(method: Any) -> bool:
+    """判断声明方法当前是否存在非默认链底的覆盖实现。"""
+    cls, key = _resolve_impl_key(method)
+    chain = _impl_chain.get((cls, key), [])
+    return any(source_module != "__default__" for _func, source_module, _seq in chain)
+
+
+def impl_chain(method: Any) -> list[tuple[Callable[..., Any], str, int]]:
+    """返回指定 method 的 @impl 链浅拷贝。"""
+    cls, key = _resolve_impl_key(method)
+    return list(_impl_chain.get((cls, key), []))
+
+
+def impl_call_super(
+    method: Any,
+    *args: Any,
+    _frame_depth: int = 1,
+    **kwargs: Any,
+) -> Any:
     """调用 @impl 链中当前实现的上一级实现。
 
     必须从 @impl 函数体内调用。框架通过调用栈定位调用方所在模块，
@@ -1100,21 +1207,35 @@ def call_super_impl(method: Any, *args: Any, **kwargs: Any) -> Any:
                 raise _enrich_error(e) from e
     """
     cls, key = _resolve_impl_key(method)
-    caller_module = sys._getframe(1).f_globals.get("__name__", "")
+    caller_module = sys._getframe(_frame_depth).f_globals.get("__name__", "")
     chain = _impl_chain.get((cls, key), [])
     for i, (_fn, mod, _seq) in enumerate(chain):
         if mod == caller_module:
-            # 跳过链底的 __default__ 桩条目（调用它只会抛桌NotImplementedError）
-            if i == 0 or chain[i - 1][1] == "__default__":
+            if i == 0:
                 raise NotImplementedError(
                     f"No super implementation for {cls.__name__}.{key} "
                     f"below module {mod!r}"
                 )
-            return chain[i - 1][0](*args, **kwargs)
+            prev_func, prev_module, _prev_seq = chain[i - 1]
+            if prev_module == "__default__" and not _default_impl_has_behavior(prev_func):
+                raise NotImplementedError(
+                    f"No super implementation for {cls.__name__}.{key} "
+                    f"below module {mod!r}"
+                )
+            return prev_func(*args, **kwargs)
     raise RuntimeError(
-        f"call_super_impl({cls.__name__}.{key}) must be called from within "
+        f"impl_call_super({cls.__name__}.{key}) must be called from within "
         f"an @impl function for that method (caller module: {caller_module!r})"
     )
+
+
+def call_super_impl(method: Any, *args: Any, **kwargs: Any) -> Any:
+    warnings.warn(
+        "mutobj.call_super_impl() is deprecated; use mutobj.impl_call_super() instead.",
+        DeprecationWarning,
+        stacklevel=2,
+    )
+    return impl_call_super(method, *args, _frame_depth=2, **kwargs)
 
 
 def impl(

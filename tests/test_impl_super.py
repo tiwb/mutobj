@@ -86,7 +86,8 @@ class TestErrors:
 
     def test_super_at_chain_bottom_raises(self):
         class Svc(mutobj.Declaration):
-            def run(self) -> str: ...
+            def run(self) -> str:
+                raise NotImplementedError
 
         mod = _make_module("super_bottom_mod")
         mod["Svc"] = Svc
