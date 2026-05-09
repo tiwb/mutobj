@@ -11,7 +11,7 @@ import importlib
 import sys
 import warnings
 import weakref
-from typing import TypeVar, Generic, Callable, Any, Self
+from typing import ClassVar as ClassVarType, TypeVar, Generic, Callable, Any, Self, get_origin as _typing_get_origin
 
 __all__ = ["Declaration", "Extension", "impl", "impl_call_super", "call_super_impl", "impl_has",
            "impl_has_override", "impl_chain", "unregister_module_impls", "field", "MISSING",
@@ -33,6 +33,10 @@ _module_first_seq: dict[tuple[type, str, str], int] = {}  # (cls, key, module) -
 
 # 全局属性注册表: {类: {属性名: 类型注解}}
 _attribute_registry: dict[type, dict[str, Any]] = {}
+
+# 全局 ClassVar 注册表: {类: {属性名, ...}}
+# 用于继承 / reload 场景，避免每次依赖字符串注解重新解析父类 ClassVar。
+_classvar_registry: dict[type, set[str]] = {}
 
 # 全局 property 注册表: {类: {property名: Property}}
 _property_registry: dict[type, dict[str, "Property"]] = {}
@@ -270,6 +274,74 @@ def _register_to_chain(
     return chain[-1][1] == source_module
 
 
+def _resolve_annotation_name(base: str, module_name: str) -> Any:
+    """Resolve a string annotation base name in module globals.
+
+    Supports plain aliases (``CV``) and dotted aliases (``t.ClassVar``) without
+    evaluating the full annotation expression / forward refs.
+    """
+    parts = [part for part in base.split(".") if part]
+    if not parts:
+        return None
+
+    root_name = parts[0]
+    root: Any = None
+    root_found = False
+
+    module = sys.modules.get(module_name)
+    if module is not None:
+        module_globals = vars(module)
+        if root_name in module_globals:
+            root = module_globals[root_name]
+            root_found = True
+
+    # Allow explicit string annotations like "typing.ClassVar[T]" even if the
+    # declaring module did not bind a ``typing`` global.
+    if not root_found and root_name == "typing":
+        root = importlib.import_module("typing")
+        root_found = True
+
+    if not root_found:
+        return None
+
+    obj = root
+    for part in parts[1:]:
+        try:
+            obj = getattr(obj, part)
+        except AttributeError:
+            return None
+    return obj
+
+
+def _is_classvar(annotation: Any, module_name: str) -> bool:
+    """检测注解是否代表 `typing.ClassVar`（已 evaluated 或字符串形态）。"""
+    # 已 evaluated 的 ClassVar / ClassVar[...]
+    if annotation is ClassVarType:
+        return True
+    origin = _typing_get_origin(annotation)
+    if origin is not None and origin is ClassVarType:
+        return True
+
+    # 字符串注解（如 "ClassVar[int]"、"typing.ClassVar[T]"、"t.ClassVar[T]"、"CV[int]" 等）
+    if isinstance(annotation, str):
+        ann = annotation.strip()
+        bracket = ann.find("[")
+        base = ann[:bracket].strip() if bracket != -1 else ann
+
+        if base == "ClassVar" or base == "typing.ClassVar":
+            return True
+
+        # 别名解析：查模块 globals（如 import typing as t / from typing import ClassVar as CV）
+        obj = _resolve_annotation_name(base, module_name)
+        if obj is ClassVarType:
+            return True
+        origin2 = _typing_get_origin(obj)
+        if origin2 is not None and origin2 is ClassVarType:
+            return True
+
+    return False
+
+
 class AttributeDescriptor:
     """属性描述符，用于拦截属性访问"""
 
@@ -410,7 +482,15 @@ def _update_class_inplace(existing: type, new_cls: type) -> None:
     for attr in new_attrs - _SKIP:
         val = new_cls.__dict__[attr]
         try:
-            setattr(existing, attr, val)
+            # Reload may change a mutobj field into a plain ClassVar/class attr.
+            # In that case DeclarationMeta.__setattr__ would otherwise interpret
+            # the plain value as "rebuild the existing AttributeDescriptor default".
+            # Bypass the metaclass hook so the new definition is authoritative.
+            old_val = existing.__dict__.get(attr)
+            if isinstance(old_val, AttributeDescriptor) and not isinstance(val, AttributeDescriptor):
+                type.__setattr__(existing, attr, val)
+            else:
+                setattr(existing, attr, val)
         except (AttributeError, TypeError):
             pass
 
@@ -477,6 +557,12 @@ def _migrate_registries(existing: type, new_cls: type) -> None:
     if new_cls in _attribute_registry:
         _attribute_registry[existing] = _attribute_registry.pop(new_cls)
 
+    # ClassVar registry: replace (new definition is authoritative)
+    if new_cls in _classvar_registry:
+        _classvar_registry[existing] = _classvar_registry.pop(new_cls)
+
+    _invalidate_ordered_fields_cache_for(existing)
+
     # Property registry: replace, fixing owner_cls references
     if new_cls in _property_registry:
         props = _property_registry.pop(new_cls)
@@ -529,9 +615,33 @@ class DeclarationMeta(type):
         # 获取类型注解
         annotations = getattr(cls, "__annotations__", {})
 
+        # 收集父类 ClassVar 字段名（防止子类"降级"为普通字段）
+        parent_classvars: set[str] = set()
+        module = namespace.get("__module__", "")
+        for base in cls.__mro__[1:]:
+            parent_classvars.update(_classvar_registry.get(base, set()))
+            base_anns = getattr(base, "__annotations__", {})
+            base_module = getattr(base, "__module__", "")
+            for base_attr, base_type in base_anns.items():
+                if _is_classvar(base_type, base_module):
+                    parent_classvars.add(base_attr)
+
         # 处理属性声明
         attr_registry: dict[str, Any] = {}
+        classvar_attrs: set[str] = set()
         for attr_name, attr_type in annotations.items():
+            # ClassVar 字段：不创建描述符，不进 _attribute_registry
+            if _is_classvar(attr_type, module) or attr_name in parent_classvars:
+                classvar_attrs.add(attr_name)
+                value = namespace.get(attr_name)
+                if isinstance(value, Field):
+                    raise TypeError(
+                        f"Declaration '{name}' attribute '{attr_name}' is ClassVar "
+                        f"and does not support field(default_factory=...). "
+                        f"Use a plain default value or a module-level constant instead."
+                    )
+                continue
+
             value = namespace.get(attr_name)
 
             if isinstance(value, Field):
@@ -570,6 +680,15 @@ class DeclarationMeta(type):
         for attr_name, value in namespace.items():
             if attr_name in own_annotations:
                 continue  # 已经在上面的注解属性处理中处理过
+            if attr_name in parent_classvars:
+                classvar_attrs.add(attr_name)
+                if isinstance(value, Field):
+                    raise TypeError(
+                        f"Declaration '{name}' attribute '{attr_name}' is ClassVar "
+                        f"and does not support field(default_factory=...). "
+                        f"Use a plain default value or a module-level constant instead."
+                    )
+                continue
             if attr_name.startswith("_"):
                 continue
             if callable(value) or isinstance(value, (property, classmethod, staticmethod)):
@@ -606,6 +725,7 @@ class DeclarationMeta(type):
             attr_registry[attr_name] = parent_desc.annotation
 
         _attribute_registry[cls] = attr_registry
+        _classvar_registry[cls] = classvar_attrs
 
         # 处理 property 声明（所有 @property 转为 mutobj.Property，保存原始函数为默认实现）
         prop_registry: dict[str, Property] = {}
@@ -829,11 +949,21 @@ class DeclarationMeta(type):
 
         if from_base and cls in _attribute_registry and name not in _attribute_registry[cls]:  # pyright: ignore[reportUnnecessaryContains]
             _attribute_registry[cls][name] = desc.annotation
-            _ordered_fields_cache.pop(cls, None)
+        _invalidate_ordered_fields_cache_for(cls)
 
 
 # 有序字段缓存：{类: [字段名, ...]}（基类在前，与 dataclass 一致）
 _ordered_fields_cache: dict[type, list[str]] = {}
+
+
+def _invalidate_ordered_fields_cache_for(cls: type) -> None:
+    """Invalidate ordered-field cache for cls and its subclasses."""
+    for cached_cls in list(_ordered_fields_cache):
+        try:
+            if issubclass(cached_cls, cls):
+                _ordered_fields_cache.pop(cached_cls, None)
+        except TypeError:
+            _ordered_fields_cache.pop(cached_cls, None)
 
 
 def _get_ordered_fields(cls: type) -> list[str]:

@@ -77,6 +77,67 @@ class Config(mutobj.Declaration):
 - `field(init=False)` 的字段在构造时只用默认值，不接受 `__init__` 参数
 - 子类可用同名注解（或同名等号赋值）覆盖父类默认值
 
+### `ClassVar`：类级单例属性
+
+当需要在 `Declaration` 子类上声明**类级共享属性**（如启动期注入的全局引用、计数器、共享缓存），用 `typing.ClassVar`：
+
+```python
+from typing import ClassVar
+
+class Counter(mutobj.Declaration):
+    instances: ClassVar[int] = 0       # 类级单例，所有实例共享
+    name: str = "x"                    # 实例字段
+
+    def __post_init__(self) -> None:
+        Counter.instances += 1
+```
+
+行为对照：
+
+| 写法 | `Cls.x` 类级读 | `inst.x` 实例读 | `Cls.x = v` 效果 |
+|------|---------------|-----------------|-----------------|
+| `x: ClassVar[T] = v`（**推荐**） | 返回 `v` | 走类属性回落，返回当前值 | 直接设值，**所有实例立刻看到新值** |
+| `x: T = v`（mutobj 字段） | 返回 `AttributeDescriptor` 对象（不是值！） | 返回该实例的 `_mutobj_attr_x` | 重建描述符 default；老实例不变 |
+| `x = v`（无注解） | 返回值 | 走类属性回落，返回值 | 所有实例看到新值 |
+
+**规则**：
+
+- `ClassVar` 字段**不进 `_attribute_registry`**，不参与实例字段绑定
+- `ClassVar` **不支持 `field(default_factory=...)`**，如需可变默认值改用模块级常量
+- 子类覆盖父类 `ClassVar`：父类是 `ClassVar` → 子类同名也按 `ClassVar` 处理（即使子类忘了重复标注 `ClassVar`），避免悄悄"降级"为实例字段
+- IDE / mypy / pyright 原生支持，无兼容问题
+
+**常见反例**（踩坑案例）：
+
+```python
+# ✗ 错误：写成实例字段 + 类级赋值，语义错位
+class Registry(mutobj.Declaration):
+    current: "Backend | None" = None   # 这是每实例字段，不是类级单例！
+
+# 启动期注入
+Registry.current = backend   # 实际是"重建描述符 default"，老实例不变
+```
+
+这种写法在 "每次新建实例" 的场景下"碰巧能跑"（新实例赶上新 default），但：
+- `print(Registry.current)` 拿到 `AttributeDescriptor` 对象而非值
+- 赋值前创建的实例不会更新
+- 正确写法：`current: ClassVar["Backend | None"] = None`
+
+**前向引用 / 循环 import**：能直接 import 时**优先用裸类型**（IDE 跳转、`get_type_hints()` 反射均更可靠）；仅当存在循环 import 时配合 `TYPE_CHECKING` 用字符串形态：
+
+```python
+from typing import TYPE_CHECKING, ClassVar
+
+if TYPE_CHECKING:
+    from myapp.backend import Backend   # 运行时不 import，避免循环
+
+class Registry(mutobj.Declaration):
+    current: ClassVar["Backend | None"] = None    # 字符串 forward ref
+```
+
+mutobj 元类同时识别裸类型与字符串两种形态的 `ClassVar` 注解，两种写法行为完全一致。
+
+
 **`__post_init__`**：所有字段绑定完后由元类**强制**调用，做派生计算。即使用户自定义 `__init__` 没调 `super().__init__()`，`__post_init__` 也会触发。
 
 ```python
@@ -271,6 +332,8 @@ def greet(self: User) -> str:
 三者都支持声明-实现分离。**声明时方法体作为默认实现**，`@impl` 覆盖。
 
 ```python
+from typing import Self
+
 # 声明
 class Product(mutobj.Declaration):
     name: str
@@ -280,7 +343,7 @@ class Product(mutobj.Declaration):
     def price(self) -> float: ...
 
     @classmethod
-    def from_dict(cls, data: dict) -> "Product": ...
+    def from_dict(cls, data: dict) -> Self: ...   # PEP 673：返回自身类型，子类继承时自动收窄
 
     @staticmethod
     def validate_name(name: str) -> bool: ...

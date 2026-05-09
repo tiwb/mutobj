@@ -4,6 +4,8 @@
 
 mutobj (Mutable Object) 是一个支持声明与实现分离的 Python 类定义库。
 
+> **类级单例属性**（如启动期注入的全局引用）→ 见 [guide.md#classvar类级单例属性](../guide.md#classvar类级单例属性)
+
 ## Core API
 
 ### `mutobj.Declaration`
@@ -73,11 +75,13 @@ def set_display_price(self: Product, value: str) -> None:
 **classmethod/staticmethod 实现：**
 
 ```python
+from typing import Self
+
 class Factory(mutobj.Declaration):
     value: int
 
     @classmethod
-    def create(cls, v: int) -> "Factory":
+    def create(cls, v: int) -> Self:    # PEP 673：返回自身类型
         ...
 
     @staticmethod
