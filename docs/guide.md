@@ -117,6 +117,41 @@ def greet(self: User) -> str:
 mutobj.unregister_module_impls("mypkg._user_impl")
 ```
 
+### 命名约定
+
+`@impl` 函数名不影响运行时行为（按目标方法句柄匹配，不依赖函数名），但一致的命名有利于代码可读性和搜索。
+
+**同名优先**：当实现文件只为一个类提供方法实现时，`@impl` 函数名应与声明方法名一致。
+
+```python
+# _conversation_impl.py — 只为 Conversation 一个类实现方法
+@mutobj.impl(Conversation.render)
+def render(self: Conversation) -> ViewBlock:
+    ...
+```
+
+**类名前缀**：当同一个实现文件为多个类实现**同名方法**时，用 `类名_方法名`（小写蛇形）区分。
+
+```python
+# _messages_impl.py — 为多个类实现 render()
+@mutobj.impl(MessageList.render)
+def message_list_render(self: MessageList) -> ViewBlock:
+    ...
+
+@mutobj.impl(UserMessage.render)
+def user_message_render(self: UserMessage) -> ViewBlock:
+    ...
+```
+
+类名转小写蛇形的规则：`MessageList` → `message_list`，`UserMessage` → `user_message`，`BlockRenderer` → `block_renderer`。`__init__` 同理：单类用 `__init__`；多类冲突时用 `类名_init`（如 `message_list_init`）。
+
+**私有辅助函数**：不被 `@impl` 注册、仅模块内部使用的函数，用下划线前缀。
+
+```python
+def _format_clock(timestamp: float) -> str: ...
+def _toggle(*, view: ThinkingBlock) -> None: ...
+```
+
 ### 调用上一级实现：`call_super_impl`
 
 在 `@impl` 函数体内，可用 `mutobj.call_super_impl(method, *args, **kwargs)` 显式调用覆盖链上**前一层**实现（类似 `super().method()` 之于继承），用于做装饰、追加日志、参数预处理等：
