@@ -600,7 +600,7 @@ class DeclarationMeta(type):
         # Declaration 基类本身：只把白名单中的"用户钩子"登记为已声明方法,
         # __init__ / __new__ 等框架基础设施不进 _DECLARED_METHODS,避免被自动委托替换
         if name == "Declaration" and not bases:
-            declared = set()
+            declared: set[str] = set()
             for hook_name in _DECLARATION_USER_HOOKS:
                 hook = namespace.get(hook_name)
                 if callable(hook):
@@ -1337,7 +1337,7 @@ def impl_call_super(
                 raise _enrich_error(e) from e
     """
     cls, key = _resolve_impl_key(method)
-    caller_module = sys._getframe(_frame_depth).f_globals.get("__name__", "")
+    caller_module = sys._getframe(_frame_depth).f_globals.get("__name__", "")  # pyright: ignore[reportPrivateUsage]
     chain = _impl_chain.get((cls, key), [])
     for i, (_fn, mod, _seq) in enumerate(chain):
         if mod == caller_module:
