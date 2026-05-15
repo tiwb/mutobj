@@ -11,15 +11,16 @@ import importlib
 import sys
 import warnings
 import weakref
-from typing import ClassVar as ClassVarType, TypeVar, Generic, Callable, Any, Self, get_origin as _typing_get_origin
+from typing import ClassVar as ClassVarType, Mapping, TypeVar, Generic, Callable, Any, Self, get_origin as _typing_get_origin
 
 __all__ = ["Declaration", "Extension", "impl", "impl_call_super", "call_super_impl", "impl_has",
            "impl_has_override", "impl_chain", "unregister_module_impls", "field", "MISSING",
            "discover_subclasses", "get_registry_generation", "resolve_class",
-           "extensions", "extension_types"]
+           "extensions", "extension_types", "field_default", "field_info", "fields"]
 
 # 类型变量
 T = TypeVar("T", bound="Declaration")
+_F = TypeVar("_F")
 
 # 实现覆盖链：{(类, 方法名或属性访问器): [(实现函数, 来源模块, 注册序号), ...]}
 # 按注册序号排序，列表尾部（最高序号）= 当前活跃实现
@@ -1304,6 +1305,69 @@ def impl_chain(method: Any) -> list[tuple[Callable[..., Any], str, int]]:
     """返回指定 method 的 @impl 链浅拷贝。"""
     cls, key = _resolve_impl_key(method)
     return list(_impl_chain.get((cls, key), []))
+
+
+def field_default(field: _F, /) -> _F:
+    """获取 Declaration 字段的默认值。
+
+    用法（类级访问 token + 类型透传）：
+
+        class Action(mutobj.Declaration):
+            categories: tuple[str, ...] = ()
+
+        defaults = mutobj.field_default(Action.categories)  # 推断为 tuple[str, ...]
+
+    `Cls.field_name` 类级访问运行时返回 `AttributeDescriptor`（属内部实现细节）；
+    本函数用 TypeVar 让 pyright 视角下的返回类型等于字段声明类型，避免消费方写
+    `# pyright: ignore`。动态字段名场景请用 ``mutobj.fields(cls)[name].make_default()``。
+
+    传入非 descriptor token（如已绑定到实例的字段值）会抛 TypeError。
+    若字段未声明默认值，转抛 ValueError（来自 ``AttributeDescriptor.make_default``）。
+    """
+    if not isinstance(field, AttributeDescriptor):
+        raise TypeError(
+            f"field_default(field) expects a class-level field token (e.g. Cls.field_name), "
+            f"got {type(field).__name__!r}. Use mutobj.fields(cls)[name].make_default() "
+            f"for dynamic field-name access."
+        )
+    return field.make_default()
+
+
+def field_info(field: object, /) -> "AttributeDescriptor":
+    """获取 Declaration 字段的元信息描述符（含 default/default_factory/init/annotation 等）。
+
+    用法：
+
+        info = mutobj.field_info(Action.categories)
+        info.has_default  # bool
+        info.annotation   # tuple[str, ...]
+
+    传入非 descriptor token 抛 TypeError。
+    """
+    if not isinstance(field, AttributeDescriptor):
+        raise TypeError(
+            f"field_info(field) expects a class-level field token (e.g. Cls.field_name), "
+            f"got {type(field).__name__!r}."
+        )
+    return field
+
+
+def fields(cls: type, /) -> Mapping[str, "AttributeDescriptor"]:
+    """返回 Declaration 类（含基类，按 MRO 顺序）的所有字段描述符映射。
+
+    与 ``dataclasses.fields()`` 同构，用于动态字段名遍历场景：
+
+        for name, info in mutobj.fields(Action).items():
+            print(name, info.make_default())
+
+    返回的是只读视图（dict 实例），调用方不应修改。
+    """
+    result: dict[str, AttributeDescriptor] = {}
+    for name in _get_ordered_fields(cls):
+        desc = _get_attribute_descriptor(cls, name)
+        if desc is not None:
+            result[name] = desc
+    return result
 
 
 def impl_call_super(

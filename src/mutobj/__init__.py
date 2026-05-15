@@ -6,9 +6,11 @@ mutobj - Mutable Object Declaration
 
 from mutobj.core import Declaration, Extension, impl, impl_call_super, call_super_impl, impl_has, impl_has_override, \
     impl_chain, field, MISSING, register_module_impls, unregister_module_impls, discover_subclasses, \
-    get_registry_generation, resolve_class, extensions, extension_types, get_declaration_doc
+    get_registry_generation, resolve_class, extensions, extension_types, get_declaration_doc, \
+    field_default, field_info, fields
 
 __version__ = "0.9.999"
 __all__ = ["Declaration", "Extension", "impl", "impl_call_super", "call_super_impl", "impl_has", "impl_has_override",
             "impl_chain", "field", "MISSING", "register_module_impls", "unregister_module_impls", "discover_subclasses",
-            "get_registry_generation", "resolve_class", "extensions", "extension_types", "get_declaration_doc"]
+            "get_registry_generation", "resolve_class", "extensions", "extension_types", "get_declaration_doc",
+            "field_default", "field_info", "fields"]

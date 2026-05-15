@@ -158,3 +158,134 @@ class TestAttributeDescriptorDefaults:
             assert "has no default" in str(exc)
         else:
             raise AssertionError("expected ValueError")
+
+
+class TestFieldReflectionAPI:
+    """测试公开反射 API：field_default / field_info / fields。"""
+
+    def test_field_default_returns_value(self) -> None:
+        class Action(mutobj.Declaration):
+            categories: tuple[str, ...] = ()
+            order: int | None = None
+            label: str = "x"
+
+        assert mutobj.field_default(Action.categories) == ()
+        assert mutobj.field_default(Action.order) is None
+        assert mutobj.field_default(Action.label) == "x"
+
+    def test_field_default_invokes_factory_each_call(self) -> None:
+        class Item(mutobj.Declaration):
+            entries: list[int] = mutobj.field(default_factory=lambda: [1, 2, 3])
+
+        a = mutobj.field_default(Item.entries)
+        b = mutobj.field_default(Item.entries)
+        assert a == [1, 2, 3]
+        assert b == [1, 2, 3]
+        assert a is not b  # 工厂每次生成新对象
+
+    def test_field_default_without_default_raises(self) -> None:
+        class Item(mutobj.Declaration):
+            value: int
+
+        try:
+            mutobj.field_default(Item.value)
+        except ValueError as exc:
+            assert "has no default" in str(exc)
+        else:
+            raise AssertionError("expected ValueError")
+
+    def test_field_default_rejects_non_descriptor_token(self) -> None:
+        class Action(mutobj.Declaration):
+            categories: tuple[str, ...] = ()
+
+        inst = Action()
+        # 实例属性是 tuple，不是 descriptor
+        try:
+            mutobj.field_default(inst.categories)
+        except TypeError as exc:
+            assert "class-level field token" in str(exc)
+        else:
+            raise AssertionError("expected TypeError")
+
+        # 任意别的值也该被拒
+        try:
+            mutobj.field_default("some string")
+        except TypeError:
+            pass
+        else:
+            raise AssertionError("expected TypeError")
+
+    def test_field_info_returns_descriptor(self) -> None:
+        class Action(mutobj.Declaration):
+            categories: tuple[str, ...] = ("a",)
+
+        from mutobj.core import AttributeDescriptor
+
+        info = mutobj.field_info(Action.categories)
+        assert isinstance(info, AttributeDescriptor)
+        assert info.name == "categories"
+        assert info.has_default is True
+        assert info.default == ("a",)
+        assert info.init is True
+
+    def test_field_info_rejects_non_descriptor(self) -> None:
+        try:
+            mutobj.field_info(123)
+        except TypeError as exc:
+            assert "class-level field token" in str(exc)
+        else:
+            raise AssertionError("expected TypeError")
+
+    def test_fields_returns_all_descriptors(self) -> None:
+        class Action(mutobj.Declaration):
+            categories: tuple[str, ...] = ()
+            order: int | None = None
+            label: str = "x"
+
+        from mutobj.core import AttributeDescriptor
+
+        result = mutobj.fields(Action)
+        assert set(result.keys()) == {"categories", "order", "label"}
+        for name, info in result.items():
+            assert isinstance(info, AttributeDescriptor)
+            assert info.name == name
+
+    def test_fields_inheritance_mro_order(self) -> None:
+        class Base(mutobj.Declaration):
+            x: int = 1
+            y: int = 2
+
+        class Child(Base):
+            z: int = 3
+
+        # 基类在前，子类在后（与 dataclass 一致）
+        assert list(mutobj.fields(Child).keys()) == ["x", "y", "z"]
+        assert list(mutobj.fields(Base).keys()) == ["x", "y"]
+
+    def test_fields_subclass_overrides_descriptor(self) -> None:
+        class Base(mutobj.Declaration):
+            x: int = 1
+
+        class Child(Base):
+            x: int = 99  # 覆盖默认值
+
+        assert mutobj.field_default(Child.x) == 99
+        assert mutobj.field_default(Base.x) == 1
+        # fields(Child) 返回最派生的 descriptor
+        assert mutobj.fields(Child)["x"].default == 99
+
+    def test_fields_dynamic_field_name_use_case(self) -> None:
+        """上下文：动态字段名场景走 fields(cls)[name]。"""
+        class Action(mutobj.Declaration):
+            categories: tuple[str, ...] = ("x",)
+
+        name = "categories"
+        info = mutobj.fields(Action)[name]
+        assert info.make_default() == ("x",)
+
+    def test_fields_empty_for_no_field_class(self) -> None:
+        class Empty(mutobj.Declaration):
+            pass
+
+        assert dict(mutobj.fields(Empty)) == {}
+

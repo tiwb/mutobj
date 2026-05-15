@@ -385,6 +385,63 @@ class Config(mutobj.Declaration):
 
 ---
 
+## Field Reflection API
+
+类级访问 `Cls.field_name` 在运行时返回 `AttributeDescriptor`（`__get__(None, ...)` 返回 self），可用于读取声明默认值、字段元信息。这一行为是**内部实现细节**，因为 pyright 从 `__annotations__` 推断的类型是字段声明类型（如 `tuple[str, ...]`），不知道运行时是 descriptor，导致消费方 `Cls.field.make_default()` 触发 `reportAttributeAccessIssue`。
+
+公开反射 API（与 `impl_has(Cls.method)` 同构的「类点成员当 token 传」范式）：
+
+### `mutobj.field_default(field, /)`
+
+返回字段的默认值。`field` 必须是 `Cls.field_name` 形式的类级 token（即 `AttributeDescriptor`）。
+
+类型 stub 用 `TypeVar` 实现透传 —— pyright 视角下返回类型 = 字段声明类型，消费方无需 `# pyright: ignore`：
+
+```python
+class Action(mutobj.Declaration):
+    categories: tuple[str, ...] = ()
+    order: int | None = None
+
+# pyright 推断为 tuple[str, ...]，可直接做容器操作
+if "x" in mutobj.field_default(Action.categories):
+    ...
+
+# pyright 推断为 int | None
+order = mutobj.field_default(Action.order)
+```
+
+**异常：**
+- `TypeError`: 传入非 descriptor token（如实例属性 `inst.categories`、字符串）
+- `ValueError`: 字段未声明默认值
+
+动态字段名场景走 `fields(cls)[name].make_default()`。
+
+### `mutobj.field_info(field, /)`
+
+返回字段对应的 `AttributeDescriptor` 元信息（含 `name`、`annotation`、`default`、`default_factory`、`init`、`has_default`）。少数高级场景使用。
+
+```python
+info = mutobj.field_info(Action.categories)
+assert info.has_default
+assert info.annotation == tuple[str, ...]
+```
+
+**异常：**
+- `TypeError`: 传入非 descriptor token
+
+### `mutobj.fields(cls, /)`
+
+返回类（含基类、按 MRO 顺序）所有字段描述符的只读映射，与 `dataclasses.fields()` 同构，用于动态字段名遍历：
+
+```python
+for name, info in mutobj.fields(Action).items():
+    print(name, info.make_default())
+```
+
+返回 `Mapping[str, AttributeDescriptor]`。子类字段会覆盖同名基类字段（取最派生类定义）。
+
+---
+
 ## Version
 
 ```python
