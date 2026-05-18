@@ -172,12 +172,10 @@ is_stub = mutobj.impl_meta_of(cls_execute, Stub) is not None
 - [x] 新增 `tests/test_impl_meta.py` 覆盖：零/一/多 meta 注册、tuple 返回、类型过滤、同模块覆盖后 meta 替换、unregister 后 meta 清空、delegate 透明转发的最小复现、非 mutobj method 或无 chain 返回空
 - [x] 全量回归：`pytest`（399 用例全过，现有 381 用例不退化）+ `pyright src/mutobj`（0 errors）
 
-### mutgui（下游待实施，本轮不动）
+### mutgui（下游实施，本轮完成）
 
-以下步骤由用户在 mutgui 仓库独立实施，依赖 mutobj 部分发布后接入：
-
-- [ ] mutgui `_action_impl.py` 新增 `class Stub: pass` 与 `@impl(Action.execute, Stub())` 占位实现（体内抛 `NotImplementedError`，错误信息带类名）
-- [ ] mutgui `action.py:113` 移除 `raise NotImplementedError` workaround，`Action.execute` 类体改回 `def execute(self, context): ...`，确认 mutobj lint R001 不再报警
-- [ ] mutgui `_action_registry.py:224` 切换 stub 判定为 `mutobj.impl_meta_of(type(action).execute, Stub) is not None`，删除相关旧导入
-- [ ] mutgui 回归测试：`pytest`（重点 `tests/test_action.py` 的 variant / menu 渲染）；目视 demo `action.py` 里 SaveAction/RunAction/CheckAction/PublishAction/MenuOnly 的 variant 推断与改动前一致
-- [ ] 回标 `feature-impl-has-semantics.md` 里「mutgui workaround 仍然存在」的遺留备注为已消除
+- [x] mutgui `_action_impl.py` 新增 `class Stub: pass` 与 `@impl(Action.execute, Stub())` 占位实现（体内抛 `NotImplementedError`，错误信息带类名）
+- [x] mutgui `action.py:113` 移除 `raise NotImplementedError` workaround，`Action.execute` 类体改回 `def execute(self, context): ...`，确认 mutobj lint R001 不再报警
+- [x] mutgui `_action_registry.py:224` 切换 stub 判定为 `mutobj.impl_meta_of(type(action).execute, Stub) is not None`，删除相关旧导入
+- [x] mutgui 回归测试：`pytest`（246 用例全过）
+- [x] 回标 `feature-impl-has-semantics.md` 里「mutgui workaround 仍然存在」的遺留备注为已消除

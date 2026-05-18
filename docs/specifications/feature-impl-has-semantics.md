@@ -167,7 +167,11 @@ mutgui 想区分「`Action.execute` 是基类桩」vs「`SaveAction.execute` 是
 - 在 `_action_impl.py` 用 `@impl(Action.execute, meta={...})` 注册一个带 stub 标记的占位实现
 - `_action_registry.py` 用 `mutobj.impl_meta(...)` 读 meta 判定
 
-具体 meta API 形态在 [`feature-impl-meta.md`](feature-impl-meta.md) 里设计。本文实施完成后，mutgui workaround 仍然存在，等 meta spec 落地后再消除。
+具体 meta API 形态在 [`feature-impl-meta.md`](feature-impl-meta.md) 里设计。meta spec 已落地，mutgui 完成迁移：
+
+- `_action_impl.py` 注册 ``@impl(Action.execute, Stub())`` 占位
+- `action.py` 类体改回 ``def execute: ...``，移除 ``raise NotImplementedError`` workaround
+- `_action_registry.py` 改用 ``mutobj.impl_meta_of(type(action).execute, Stub) is None`` 判定
 
 ## 已否决方案（死路记录，防止反复绕回）
 
@@ -224,9 +228,9 @@ mutgui 想区分「`Action.execute` 是基类桩」vs「`SaveAction.execute` 是
   - 已新增 `TestImplIsOwnAndInherited` 类覆盖主要 own/inherited 场景
   - 额外修复：`test_impl_super.py::test_super_at_chain_bottom_raises` 取消 "No super implementation" match（不再由框架报，由用户函数本身抛）
 - [x] 更新 mutobj 公开 API 文档（`__all__`、docs/api/reference.md）
-- [x] mutgui：`_action_registry.py` 的 `impl_has` 调用暂保留（语义为「有 @impl」），等 meta spec 落地后再迁移
+- [x] mutgui：`_action_registry.py` 的 `impl_has` 调用已迁移到 `mutobj.impl_meta_of(type(action).execute, Stub) is None`（meta spec 落地后完成）
 - [x] 全量测试 + lint
   - mutobj pytest: 381 passed
   - mutobj pyright src/mutobj/core.py + __init__.py: 0 errors
   - mutgui / mutagent / mutbot import OK
-  - 遗留：mutgui Action.execute 在本设计下 `impl_has_override` 语义会让“类体直接实现”的 SaveAction 被误判为 `can_execute=False`，spec 已明确记录“本文实施完成后 mutgui workaround 仍然存在，等 meta spec 落地后再消除”
+  - 已消除：mutgui `Action.execute` 的 workaround 已通过 `@impl(Action.execute, Stub())` + `impl_meta_of` 机制解决，`SaveAction` 等子类类体实现不再被误判
