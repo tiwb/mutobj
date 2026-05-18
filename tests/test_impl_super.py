@@ -1,4 +1,4 @@
-"""Tests for mutobj.call_super_impl — invoking the previous impl in the override chain."""
+"""Tests for mutobj.impl_call_super — invoking the previous impl in the override chain."""
 
 from __future__ import annotations
 
@@ -39,7 +39,7 @@ class TestBasicChain:
         exec(
             "@mutobj.impl(Svc.run)\n"
             "def run(self, x):\n"
-            "    return mutobj.call_super_impl(Svc.run, self, x) * 10\n",
+            "    return mutobj.impl_call_super(Svc.run, self, x) * 10\n",
             mod_b,
         )
 
@@ -55,8 +55,8 @@ class TestBasicChain:
 
         for name, body in [
             ("super_three_mod_a", "return x + 1"),
-            ("super_three_mod_b", "return mutobj.call_super_impl(Svc.run, self, x) * 2"),
-            ("super_three_mod_c", "return mutobj.call_super_impl(Svc.run, self, x) + 100"),
+            ("super_three_mod_b", "return mutobj.impl_call_super(Svc.run, self, x) * 2"),
+            ("super_three_mod_c", "return mutobj.impl_call_super(Svc.run, self, x) + 100"),
         ]:
             mod = _make_module(name)
             mod["Svc"] = Svc
@@ -94,7 +94,7 @@ class TestErrors:
         exec(
             "@mutobj.impl(Svc.run)\n"
             "def run(self):\n"
-            "    return mutobj.call_super_impl(Svc.run, self)\n",
+            "    return mutobj.impl_call_super(Svc.run, self)\n",
             mod,
         )
 
@@ -120,7 +120,7 @@ class TestErrors:
 
         try:
             with pytest.raises(RuntimeError, match="must be called from within"):
-                mutobj.call_super_impl(Svc.run, Svc())
+                mutobj.impl_call_super(Svc.run, Svc())
         finally:
             unregister_module_impls("super_outside_mod")
 
@@ -130,7 +130,7 @@ class TestErrors:
 
         # 完全没注册过任何 impl，链为空 → caller 不在链中 → RuntimeError
         with pytest.raises(RuntimeError):
-            mutobj.call_super_impl(Svc.run, Svc())
+            mutobj.impl_call_super(Svc.run, Svc())
 
 
 # ---------- 函数同名不影响定位 ----------
@@ -156,7 +156,7 @@ class TestSameName:
         exec(
             "@mutobj.impl(Svc.run)\n"
             "def _do(self):\n"
-            "    return mutobj.call_super_impl(Svc.run, self) + 'B'\n",
+            "    return mutobj.impl_call_super(Svc.run, self) + 'B'\n",
             mod_b,
         )
 
@@ -189,7 +189,7 @@ class TestAsync:
         exec(
             "@mutobj.impl(Svc.fetch)\n"
             "async def fetch(self, x):\n"
-            "    base = await mutobj.call_super_impl(Svc.fetch, self, x)\n"
+            "    base = await mutobj.impl_call_super(Svc.fetch, self, x)\n"
             "    return base + 1\n",
             mod_b,
         )
@@ -227,7 +227,7 @@ class TestProperty:
         exec(
             "@mutobj.impl(Product.display_name.getter)\n"
             "def display_name(self):\n"
-            "    return '[' + mutobj.call_super_impl(Product.display_name.getter, self) + ']'\n",
+            "    return '[' + mutobj.impl_call_super(Product.display_name.getter, self) + ']'\n",
             mod_b,
         )
 
@@ -265,7 +265,7 @@ class TestProperty:
         exec(
             "@mutobj.impl(Counter.value.setter)\n"
             "def _set(self, v):\n"
-            "    mutobj.call_super_impl(Counter.value.setter, self, v + 100)\n",
+            "    mutobj.impl_call_super(Counter.value.setter, self, v + 100)\n",
             mod_b,
         )
 
@@ -302,7 +302,7 @@ class TestClassmethodStaticmethod:
         exec(
             "@mutobj.impl(Svc.make)\n"
             "def make(cls, x):\n"
-            "    return mutobj.call_super_impl(Svc.make, cls, x) * 10\n",
+            "    return mutobj.impl_call_super(Svc.make, cls, x) * 10\n",
             mod_b,
         )
 
@@ -331,7 +331,7 @@ class TestClassmethodStaticmethod:
         exec(
             "@mutobj.impl(Svc.calc)\n"
             "def calc(x):\n"
-            "    return mutobj.call_super_impl(Svc.calc, x) * 10\n",
+            "    return mutobj.impl_call_super(Svc.calc, x) * 10\n",
             mod_b,
         )
 
@@ -353,8 +353,8 @@ class TestUnregisterMiddle:
 
         for name, body in [
             ("super_unreg_mod_a", "return x + 1"),
-            ("super_unreg_mod_b", "return mutobj.call_super_impl(Svc.run, self, x) * 2"),
-            ("super_unreg_mod_c", "return mutobj.call_super_impl(Svc.run, self, x) + 100"),
+            ("super_unreg_mod_b", "return mutobj.impl_call_super(Svc.run, self, x) * 2"),
+            ("super_unreg_mod_c", "return mutobj.impl_call_super(Svc.run, self, x) + 100"),
         ]:
             mod = _make_module(name)
             mod["Svc"] = Svc
