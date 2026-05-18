@@ -27,6 +27,9 @@ classifiers = [
     "Typing :: Typed",
 ]
 
+[project.scripts]
+mutobj-lint = "mutobj.lint.__main__:main"
+
 [project.urls]
 Homepage = "https://github.com/tiwb/mutobj"
 Documentation = "https://github.com/tiwb/mutobj#readme"

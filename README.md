@@ -118,6 +118,32 @@ def greet(self: User) -> str:
 - [使用指南](docs/guide.md)
 - [API 参考](docs/api/reference.md)
 
+## Lint 工具
+
+mutobj 内置静态检查工具 `mutobj-lint`，检测《声明 / 实现风格不可混合》约定。
+
+安装 mutobj 后，`mutobj-lint` 会被自动装到 PATH：
+
+```bash
+mutobj-lint src/                 # 扫描目录
+mutobj-lint --json src/          # JSON 输出（兼容 Code Climate spec，CI 可用）
+mutobj-lint --exclude tests src/ # 追加排除目录
+mutobj-lint src/foo.py           # 扫描单个文件
+```
+
+退出码：发现 error 返回 1，全清返回 0。
+
+除了 CLI，也提供函数 API：
+
+```python
+from mutobj.lint import lint_file, lint_directory
+
+for m in lint_directory("src/"):
+    print(f"{m.path}:{m.line}:{m.column} {m.rule_id} {m.message}")
+```
+
+全部纯 `ast` 实现，不 import 任何被检测模块，可安全在 CI / pre-commit 中运行。
+
 ## 开发
 
 ```bash
