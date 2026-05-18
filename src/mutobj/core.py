@@ -1449,6 +1449,9 @@ def impl(
         @mutobj.impl(User.greet)
         def greet(self: User) -> str:
             return f"Hello, {self.name}"
+
+    注意：@impl 内访问基类 `_xxx` 成员会触发 pyright `reportPrivateUsage`，
+    可在文件顶部加 `# pyright: reportPrivateUsage=false` 抑制（详见 docs/guide.md）。
     """
     def decorator(func: Callable[..., Any]) -> Callable[..., Any]:
         source_module = getattr(func, "__module__", "") or ""

@@ -409,6 +409,26 @@ from . import _user_impl as _user_impl   # noqa: F401
 
 ---
 
+## `@impl` 与基类 protected 成员
+
+`@impl` 函数物理上位于独立模块（通常是 `_*_impl.py`），不在 Declaration 类体内。当实现里调用 `self._helper()` 这类基类 protected 成员时，pyright strict 模式会报 `reportPrivateUsage`——这是 pyright 词法作用域规则的正确执行，mutobj 框架层无法消解。
+
+**标准绕行：文件级抑制**
+
+```python
+# _menu_impl.py
+# pyright: reportPrivateUsage=false
+"""..."""
+```
+
+`_*_impl.py` 按约定就是 Declaration 类的实现延伸，访问基类 protected helper 在语义上属「类内访问」，关掉该检查不会漏过真正的违规。
+
+**严谨场景**
+
+若不接受任何漏检，需要在使用者侧重新设计——例如把 helper 重新组织为模块级公开函数、独立辅助类等。mutobj 不为此提供框架层方案。
+
+---
+
 ## 覆盖链与卸载
 
 ```python
