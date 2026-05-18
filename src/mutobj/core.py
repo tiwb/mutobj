@@ -14,6 +14,7 @@ from typing import ClassVar as ClassVarType, Mapping, TypeVar, Generic, Callable
 
 __all__ = ["Declaration", "Extension", "impl", "impl_call_super", "call_super_impl", "impl_has",
            "impl_has_override", "impl_is_own", "impl_is_inherited", "impl_chain",
+           "impl_meta", "impl_meta_of",
            "unregister_module_impls", "field", "MISSING",
            "discover_subclasses", "get_registry_generation", "resolve_class",
            "extensions", "extension_types", "field_default", "field_info", "fields"]
@@ -31,6 +32,11 @@ _impl_seq: int = 0
 
 # 模块首次注册序号（reload 时复用，保持链中位置不变）
 _module_first_seq: dict[tuple[type, str, str], int] = {}  # (cls, key, module) -> seq
+
+# @impl 注册附加的 meta（附加信息）——旁路存储，不入 _impl_chain 元组。
+# 键使用 chain 条目的稳定 seq，逻辑上指向同一个注册条目。
+# 空 meta 不占条目（未出现在 dict 中等价于 "零 meta"）。
+_impl_metas: dict[tuple[type, str, int], tuple[object, ...]] = {}
 
 # 全局属性注册表: {类: {属性名: 类型注解}}
 _attribute_registry: dict[type, dict[str, Any]] = {}
@@ -237,8 +243,13 @@ def _register_to_chain(
     impl_key: str,
     func: Callable[..., Any],
     source_module: str,
+    metas: tuple[object, ...] = (),
 ) -> bool:
     """注册实现到覆盖链
+
+    Args:
+        metas: 附加的 meta 对象 tuple，与此次注册条目绑定存储。
+            空 tuple 表示无 meta，不占 ``_impl_metas`` 条目。
 
     Returns:
         是否成为链顶（活跃实现）
@@ -257,6 +268,7 @@ def _register_to_chain(
     if existing_idx is not None:
         old_seq = chain[existing_idx][2]
         chain[existing_idx] = (func, source_module, old_seq)
+        _store_metas(target_cls, impl_key, old_seq, metas)
         _registry_generation += 1
         return existing_idx == len(chain) - 1
 
@@ -271,8 +283,20 @@ def _register_to_chain(
 
     chain.append((func, source_module, seq))
     chain.sort(key=lambda x: x[2])
+    _store_metas(target_cls, impl_key, seq, metas)
     _registry_generation += 1
     return chain[-1][1] == source_module
+
+
+def _store_metas(
+    target_cls: type, impl_key: str, seq: int, metas: tuple[object, ...]
+) -> None:
+    """将 meta 写入旁路 `_impl_metas`；空 metas 则清除旧条目。"""
+    meta_key = (target_cls, impl_key, seq)
+    if metas:
+        _impl_metas[meta_key] = metas
+    else:
+        _impl_metas.pop(meta_key, None)
 
 
 def _resolve_annotation_name(base: str, module_name: str) -> Any:
@@ -1339,6 +1363,79 @@ def impl_chain(method: Any) -> list[tuple[Callable[..., Any], str, int]]:
     return list(_impl_chain.get((cls, key), []))
 
 
+def _resolve_chain_top_meta_key(
+    target_cls: type, impl_key: str, _visited: set[tuple[type, str]] | None = None
+) -> tuple[type, str, int] | None:
+    """解析 (cls, key) 链顶对应的 meta 查询键。
+
+    若链顶是 framework delegate，透明递归到 ``__mutobj_delegate_base__``
+    的链顶。带环路护栏防止异常场景下无限递归。
+
+    Returns:
+        存在链时返回 ``(target_cls, impl_key, seq)``；无链返回 ``None``。
+    """
+    if _visited is None:
+        _visited = set()
+    pair = (target_cls, impl_key)
+    if pair in _visited:
+        return None
+    _visited.add(pair)
+
+    chain = _impl_chain.get(pair)
+    if not chain:
+        return None
+
+    top_func, _mod, seq = chain[-1]
+    if getattr(top_func, "__mutobj_is_delegate__", False):
+        base = getattr(top_func, "__mutobj_delegate_base__", None)
+        delegate_name = getattr(top_func, "__mutobj_delegate_name__", impl_key)
+        if isinstance(base, type):
+            resolved = _resolve_chain_top_meta_key(base, delegate_name, _visited)
+            if resolved is not None:
+                return resolved
+        # delegate 指向不可访问：退化为当前链顶本身（一般无 meta）
+    return (target_cls, impl_key, seq)
+
+
+def impl_meta(method: Any) -> tuple[object, ...]:
+    """返回指定 method 链顶 @impl 注册时附加的全部 meta。
+
+    若链顶是 framework 生成的继承委派（delegate），透明递归到
+    被委派类的链顶取 meta，使未 override 的子类能透明拿到父类的标记。
+
+    无链 / 无 meta / 路径上未找到有效 meta 均返回空 tuple ``()``。
+
+    Args:
+        method: Declaration 子类的方法/property accessor token（与
+            ``impl_chain`` / ``impl_call_super`` 同样的 method 参数）。
+    """
+    cls, key = _resolve_impl_key(method)
+    resolved = _resolve_chain_top_meta_key(cls, key)
+    if resolved is None:
+        return ()
+    return _impl_metas.get(resolved, ())
+
+
+def impl_meta_of(method: Any, meta_type: type[_F]) -> _F | None:
+    """返回链顶 @impl 上第一个 ``isinstance(_, meta_type)`` 的 meta。
+
+    未命中返回 ``None``。delegate 透明转发规则与 ``impl_meta`` 一致。
+
+    示例::
+
+        class Stub: ...
+
+        @mutobj.impl(Action.execute, Stub())
+        def _execute_stub(self, ctx): raise NotImplementedError
+
+        is_stub = mutobj.impl_meta_of(type(action).execute, Stub) is not None
+    """
+    for m in impl_meta(method):
+        if isinstance(m, meta_type):
+            return m
+    return None
+
+
 def field_default(field: _F, /) -> _F:
     """获取 Declaration 字段的默认值。
 
@@ -1464,12 +1561,16 @@ def call_super_impl(method: Any, *args: Any, **kwargs: Any) -> Any:
 
 def impl(
     method: Callable[..., Any] | _PropertyGetterPlaceholder | _PropertySetterPlaceholder,
+    *metas: object,
 ) -> Callable[[Callable[..., Any]], Callable[..., Any]]:
     """
     方法实现装饰器
 
     Args:
         method: 要实现的方法（来自 Declaration 子类）
+        *metas: 附加到本次注册的元数据对象（任意 Python 对象）。
+            使用 ``mutobj.impl_meta()`` / ``mutobj.impl_meta_of()`` 查询。
+            示例：``@impl(Action.execute, Stub())``。
 
     Returns:
         装饰器函数
@@ -1479,6 +1580,13 @@ def impl(
         @mutobj.impl(User.greet)
         def greet(self: User) -> str:
             return f"Hello, {self.name}"
+
+        # 带 meta 注册（供 consumer 安放任意语义标记）
+        class Stub: ...
+
+        @mutobj.impl(Action.execute, Stub())
+        def _execute_stub(self, context):
+            raise NotImplementedError(...)
 
     注意：@impl 内访问基类 `_xxx` 成员会触发 pyright `reportPrivateUsage`，
     可在文件顶部加 `# pyright: reportPrivateUsage=false` 抑制（详见 docs/guide.md）。
@@ -1492,7 +1600,7 @@ def impl(
             prop = method._prop  # pyright: ignore[reportPrivateUsage]
 
             became_top = _register_to_chain(
-                target_cls, impl_key, func, source_module
+                target_cls, impl_key, func, source_module, metas
             )
             if became_top:
                 prop._fget = func  # pyright: ignore[reportPrivateUsage]
@@ -1504,7 +1612,7 @@ def impl(
             prop = method._prop  # pyright: ignore[reportPrivateUsage]
 
             became_top = _register_to_chain(
-                target_cls, impl_key, func, source_module
+                target_cls, impl_key, func, source_module, metas
             )
             if became_top:
                 prop._fset = func  # pyright: ignore[reportPrivateUsage]
@@ -1540,7 +1648,7 @@ def impl(
 
         # 注册到覆盖链
         became_top = _register_to_chain(
-            target_cls, method_name, func, source_module
+            target_cls, method_name, func, source_module, metas
         )
 
         # 保留类引用，便于后续 override
@@ -1578,10 +1686,17 @@ def unregister_module_impls(module_name: str) -> int:
         chain = _impl_chain[key]
         was_top_module = chain[-1][1] == module_name if chain else False
 
+        # 以下同步清理：链中被移除条目的 seq 对应的 _impl_metas 条目。
+        # 收集被移除条目的 seq 以同步清理 _impl_metas
+        removed_seqs = [s for _f, m, s in chain if m == module_name]
+
         # 移除指定模块的所有条目（不删除 __default__，不删除 _module_first_seq）
         before = len(chain)
         chain[:] = [(f, m, s) for f, m, s in chain if m != module_name]
         removed += before - len(chain)
+
+        for s in removed_seqs:
+            _impl_metas.pop((cls, impl_key, s), None)
 
         if not chain:
             # 链为空（无默认实现的异常情况），恢复 stub

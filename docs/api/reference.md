@@ -33,7 +33,7 @@ class User(mutobj.Declaration):
 
 ---
 
-### `@mutobj.impl(method)`
+### `@mutobj.impl(method, *metas)`
 
 方法实现装饰器，用于为声明的方法提供实现。
 
@@ -41,6 +41,7 @@ class User(mutobj.Declaration):
 
 **参数：**
 - `method`: 要实现的方法（如 `User.greet`）
+- `*metas`: 可选的附加元数据对象，与本次注册绑定。任意 Python 对象均可（mutobj 不强制基类），一般是 marker 类实例 或 dataclass。使用 [`mutobj.impl_meta()`](#mutobjimpl_metamethod) / [`mutobj.impl_meta_of()`](#mutobjimpl_meta_ofmethod-meta_type) 查询。
 
 **示例：**
 
@@ -49,6 +50,21 @@ class User(mutobj.Declaration):
 @mutobj.impl(User.greet)
 def greet(self: User) -> str:
     return f"Hello, {self.name}!"
+```
+
+**带 meta 的注册：**
+
+```python
+class Stub:
+    """marker：表示该实现为占位桩，子类必须 override。"""
+
+@mutobj.impl(Action.execute, Stub())
+def _execute_stub(self, ctx):
+    raise NotImplementedError(...)
+
+# 下游读取
+if mutobj.impl_meta_of(type(action).execute, Stub) is not None:
+    ...  # 是 stub
 ```
 
 **Property 实现：**
@@ -105,8 +121,64 @@ def validate(data: str) -> bool:
 
 **覆盖链行为：**
 - 多个模块可为同一方法注册 `@impl`，后注册者成为活跃实现
-- 同模块重复注册（reload 场景）就地替换，链中位置不变
+- 同模块重复注册（reload 场景）就地替换，链中位置不变；meta 同步替换（未传 meta = 清空原 meta）
 - 使用 `unregister_module_impls()` 卸载指定模块的实现
+
+---
+
+### `mutobj.impl_meta(method)`
+
+返回指定 method 当前链顶 `@impl` 注册时附加的全部 meta。
+
+**参数：**
+- `method`: Declaration 子类的方法 / property accessor token（与 `impl_chain` / `impl_call_super` 同型）
+
+**返回：**
+- `tuple[object, ...]`：链顶 impl 的 meta tuple，无 meta / 无链返回空 tuple `()`
+
+**delegate 透明转发：**
+若当前 cls 的链顶是 framework 生成的继承委派（子类未 override），透明递归到被委派类的链顶取 meta。使未 override 的子类能透明拿到父类的标记。
+
+**示例：**
+
+```python
+class Stub: ...
+
+@mutobj.impl(Action.execute, Stub())
+def _execute_stub(self, ctx):
+    raise NotImplementedError
+
+mutobj.impl_meta(Action.execute)
+# -> (Stub(),)
+
+class MenuOnly(Action): pass  # 不写 execute
+mutobj.impl_meta(MenuOnly.execute)
+# -> (Stub(),)   # delegate 透明转发到 Action 的链顶
+```
+
+---
+
+### `mutobj.impl_meta_of(method, meta_type)`
+
+返回链顶 `@impl` 上第一个 `isinstance(_, meta_type)` 的 meta；未命中返回 `None`。
+
+**参数：**
+- `method`: 同 `impl_meta`
+- `meta_type`: meta 类型（任意类）
+
+**返回：**
+- `meta_type | None`
+
+**示例：**
+
+```python
+stub = mutobj.impl_meta_of(type(action).execute, Stub)
+if stub is not None:
+    # 是 stub 实现
+    ...
+```
+
+**delegate 透明转发规则与 `impl_meta` 一致。**
 
 ---
 
