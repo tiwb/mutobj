@@ -1227,8 +1227,48 @@ def _resolve_impl_key(
         elif len(candidates) == 1:
             target_cls = candidates[0]
 
-        if target_cls is None and hasattr(method, "__globals__"):
-            target_cls = method.__globals__.get(class_name)
+        if target_cls is None:
+            # 走到这里说明：
+            # 1. method 没有 __mutobj_class__ tag（DeclarationMeta 会自动 tag）
+            # 2. _class_registry 中也找不到同名类（Declaration 子类会自动注册）
+            # 试从 method.__globals__ 拿同名类做第 3 层 fallback。
+            # 重要：fallback 仅对 Declaration（含 Declaration 本身）放行——
+            # 以保留"子类未带桊、反推到基类"的合法场景
+            # （后续由 impl() 装饰器的 _DECLARATION_USER_HOOKS 检查抦截）。
+            # 对非 Declaration 类则直接报 TypeError——避免 @impl 被误用到普通
+            # Python 类，引发 stub/delegate 链语义错丱（参见 SDD
+            # refactor-impl-non-declaration-guard.md）。
+            candidate = (
+                method.__globals__.get(class_name)
+                if hasattr(method, "__globals__") else None
+            )
+            if isinstance(candidate, type):
+                if issubclass(candidate, Declaration) or candidate is Declaration:
+                    target_cls = candidate
+                else:
+                    raise TypeError(
+                        f"@impl({candidate.__name__}.{method_name}): "
+                        f"{candidate.__name__} is not a mutobj.Declaration subclass. "
+                        f"@impl only supports Declaration subclasses.\nTo fix:\n"
+                        f"  - Make {candidate.__name__} inherit from mutobj.Declaration, or\n"
+                        f"  - Write the implementation directly in the class body (no @impl)"
+                    )
+            else:
+                # __globals__ 中拿不到具体类（局部类场景）。从 qualname 解析
+                # 出 simple name 用于错误信息。走到这里一定不是 Declaration，
+                # 因为 Declaration 子类一定被 _class_registry 收入、第 2 层已命中。
+                parts = [
+                    p for p in class_name.split(".")
+                    if p and p != "<locals>"
+                ]
+                cls_display = parts[-1] if parts else "<unknown>"
+                raise TypeError(
+                    f"@impl({cls_display}.{method_name}): {cls_display} "
+                    f"is not a mutobj.Declaration subclass. "
+                    f"@impl only supports Declaration subclasses.\nTo fix:\n"
+                    f"  - Make {cls_display} inherit from mutobj.Declaration, or\n"
+                    f"  - Write the implementation directly in the class body (no @impl)"
+                )
 
     if target_cls is None:
         raise ValueError(f"Cannot find class for method {method_name}")
