@@ -389,7 +389,7 @@ class Config(mutobj.Declaration):
 
 类级访问 `Cls.field_name` 在运行时返回 `AttributeDescriptor`（`__get__(None, ...)` 返回 self），可用于读取声明默认值、字段元信息。这一行为是**内部实现细节**，因为 pyright 从 `__annotations__` 推断的类型是字段声明类型（如 `tuple[str, ...]`），不知道运行时是 descriptor，导致消费方 `Cls.field.make_default()` 触发 `reportAttributeAccessIssue`。
 
-公开反射 API（与 `impl_has(Cls.method)` 同构的「类点成员当 token 传」范式）：
+公开反射 API（与 `impl_chain(Cls.method)` 同构的「类点成员当 token 传」范式）：
 
 ### `mutobj.field_default(field, /)`
 

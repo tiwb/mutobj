@@ -1,8 +1,10 @@
 # mutobj impl introspection 与 descriptor 元信息 API 设计规范
 
-**状态**：🔄 实施中
+**状态**：✅ 已完成
 **日期**：2026-04-30
 **类型**：功能设计
+
+> **⚠️ 重要**：本文中的 `impl_has()` API 已被后续设计取代，详见 [`feature-impl-has-semantics.md`](feature-impl-has-semantics.md)。`impl_has()` 已删除，替换为 4 个原子结构原语：`impl_chain` / `impl_has_override` / `impl_is_own` / `impl_is_inherited`。本文其余内容（`AttributeDescriptor` 元信息、`impl_call_super` 别名、兼容策略）仍有效。
 
 ## 需求
 
@@ -27,9 +29,13 @@
 
 本次新增 `impl_*` introspection API，统一表达“针对 @impl 链的查询”：
 
-- `mutobj.impl_has(method) -> bool`
-  - 问题语义：该声明方法当前是否有**真实可执行实现**
-  - 返回 `False` 的典型场景：当前只剩显式 `NotImplementedError` 默认桩，或 delegate 最终仍回落到未实现基类
+- ~~`mutobj.impl_has(method) -> bool`~~ → **已删除**，由 `impl_is_own` / `impl_is_inherited` / `impl_has_override` 替代。见 [`feature-impl-has-semantics.md`](feature-impl-has-semantics.md)。
+
+- `mutobj.impl_is_own(method) -> bool`
+  - 该声明方法的 chain[0] 是否为该类在自己的类体里写的 `def`（非框架 delegate）
+
+- `mutobj.impl_is_inherited(method) -> bool`
+  - 该声明方法的 chain[0] 是否为框架生成的继承委派 delegate
 
 - `mutobj.impl_has_override(method) -> bool`
   - 问题语义：该声明方法当前是否有**超出默认链底的覆盖实现**
@@ -42,17 +48,18 @@
   - 作为 `call_super_impl()` 的更统一别名
   - `call_super_impl()` 继续保留兼容，但进入 deprecate 轨道
 
-### impl_has 与 impl_has_override 的区别
+### impl_is_own / impl_is_inherited / impl_has_override 的区别
 
-两者不是互斥同义词，而是不同层级：
+三个 API 是正交的原子结构原语，回答不同的结构问题：
 
-| 场景 | `impl_has()` | `impl_has_override()` |
-|------|--------------|-----------------------|
-| 只有未实现默认桩 / delegate | `False` | `False` |
-| 类体内直接写了默认实现 | `True` | `False` |
-| 有 `@impl` 或 reload 后的新链顶覆盖 | `True` | `True` |
+| 场景 | `impl_is_own()` | `impl_is_inherited()` | `impl_has_override()` |
+|------|:---:|:---:|:---:|
+| 类体直接写 `def f: ...`（基类桩） | True | False | False |
+| 子类类体写 `def f: return 42` | True | False | False |
+| 子类 `pass`（不写 f），框架生成 delegate | False | True | False |
+| 有 `@impl` 注册 | 取决于 chain[0] | 取决于 chain[0] | True |
 
-这组语义直接对应“能不能用”与“有没有覆盖”两个常见判断，比 `is_declared_only` 更易理解。
+> **注意**：“基类桩”和“子类实现”在结构上不可分辨（二者输出完全相同），区分语义需借助 `@impl` 附加元数据机制，详见 [`feature-impl-meta.md`](feature-impl-meta.md)。
 
 ### descriptor 相关公开 API
 
@@ -97,7 +104,7 @@ Action.order.make_default()
 
 | 消费者 | 场景 | 依赖的输出 | 验收标准 |
 |--------|------|-----------|---------|
-| mutgui | 判断 `Action.execute` 是否真实实现 | `mutobj.impl_has(Action.execute)` | dropdown-only action 不再被误判为 split |
+| mutgui | 判断 `Action.execute` 是否真实实现 | 原依赖 `mutobj.impl_has()`，已移交 [`feature-impl-has-semantics.md`](feature-impl-has-semantics.md) 和 [`feature-impl-meta.md`](feature-impl-meta.md) | dropdown-only action 不再被误判为 split |
 | mutobj 用户 | 在字段 descriptor 上读取默认值元信息 | `Action.order.get_default()` / `make_default()` | 不需要字符串字段名 |
 | mutobj 用户 | 在 `@impl` 中调用上一级实现 | `mutobj.impl_call_super()` | 与 `call_super_impl()` 行为一致 |
 
@@ -111,7 +118,7 @@ Action.order.make_default()
 
 ## 设计备注
 
-- `impl_has()` 的内部判断应基于 `_impl_chain` 的结构语义，而不是基于方法对象 identity；否则仍会被 delegate stub 误导。
+- ~~`impl_has()` 的内部判断~~（已删除，见 [`feature-impl-has-semantics.md`](feature-impl-has-semantics.md)）。
 - `impl_has_override()` 不等于“当前链长 > 1”，因为链中可能同时出现默认桩与类体内默认实现；实现时应明确区分 `__default__` 与其他来源模块。
 - `AttributeDescriptor.get_default()` 与 `make_default()` 故意同时存在，避免把“声明的默认值元信息”和“实例默认值生产”混成一个 API。
-- `impl_has()` 本轮不把 `...` / `pass` 形式的类体默认实现视为“未实现”；只有显式 `NotImplementedError` 与最终回落到未实现基类的 delegate 才返回 `False`。
+- ~~`impl_has()` 的语义判断逻辑已删除~~（不再通过字节码扫描判断函数体）。`impl_is_own` / `impl_is_inherited` 只回答结构事实，不替 consumer 拍板语义。

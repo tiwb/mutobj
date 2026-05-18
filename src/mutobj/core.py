@@ -6,7 +6,6 @@ mutobj 核心模块
 
 from __future__ import annotations
 
-import dis
 import importlib
 import sys
 import warnings
@@ -14,7 +13,8 @@ import weakref
 from typing import ClassVar as ClassVarType, Mapping, TypeVar, Generic, Callable, Any, Self, get_origin as _typing_get_origin
 
 __all__ = ["Declaration", "Extension", "impl", "impl_call_super", "call_super_impl", "impl_has",
-           "impl_has_override", "impl_chain", "unregister_module_impls", "field", "MISSING",
+           "impl_has_override", "impl_is_own", "impl_is_inherited", "impl_chain",
+           "unregister_module_impls", "field", "MISSING",
            "discover_subclasses", "get_registry_generation", "resolve_class",
            "extensions", "extension_types", "field_default", "field_info", "fields"]
 
@@ -1276,69 +1276,61 @@ def _resolve_impl_key(
     return target_cls, method_name
 
 
-def _meaningful_instructions(func: Callable[..., Any]) -> list[dis.Instruction]:
-    return [
-        ins for ins in dis.get_instructions(func)
-        if ins.opname not in {"RESUME", "CACHE", "EXTENDED_ARG", "NOP", "COPY_FREE_VARS"}
-    ]
-
-
-def _looks_like_notimplemented_stub(func: Callable[..., Any]) -> bool:
-    instructions = _meaningful_instructions(func)
-    if not instructions or instructions[-1].opname != "RAISE_VARARGS":
-        return False
-    return any(
-        ins.opname in {"LOAD_GLOBAL", "LOAD_NAME"} and ins.argval == "NotImplementedError"
-        for ins in instructions
-    )
-
-
-def _default_impl_has_behavior(
-    func: Callable[..., Any],
-    *,
-    seen: set[tuple[type, str]] | None = None,
-) -> bool:
-    if getattr(func, "__mutobj_is_stub__", False):
-        return False
-    if getattr(func, "__mutobj_is_delegate__", False):
-        base = getattr(func, "__mutobj_delegate_base__", None)
-        name = getattr(func, "__mutobj_delegate_name__", None)
-        if isinstance(base, type) and isinstance(name, str):
-            visit_key = (base, name)
-            if seen is None:
-                seen = set()
-            if visit_key in seen:
-                return False
-            seen.add(visit_key)
-            chain = _impl_chain.get(visit_key, [])
-            if not chain:
-                return False
-            top_func, top_module, _seq = chain[-1]
-            if top_module != "__default__":
-                return True
-            return _default_impl_has_behavior(top_func, seen=seen)
-    if _looks_like_notimplemented_stub(func):
-        return False
-    return True
-
-
 def impl_has(method: Any) -> bool:
-    """判断声明方法当前是否有真实可执行实现。"""
+    """【已弃用】请改用 ``impl_has_override`` / ``impl_is_own`` / ``impl_is_inherited``。
+
+    原语义「是否有真实可执行实现」是语义判断，框架只能回答结构问题；
+    旧实现依赖字节码扫描推断函数体，已在本版本移除。
+    过渡期本函数等价于 ``impl_has_override``（仅判是否有 ``@impl`` 注册项），
+    下一个版本将删除。
+    """
+    warnings.warn(
+        "mutobj.impl_has() is deprecated; use mutobj.impl_has_override() / "
+        "mutobj.impl_is_own() / mutobj.impl_is_inherited() instead. "
+        "The old bytecode-based 'real implementation' detection has been removed.",
+        DeprecationWarning,
+        stacklevel=2,
+    )
+    return impl_has_override(method)
+
+
+def impl_has_override(method: Any) -> bool:
+    """判断声明方法是否被 ``@impl`` 注册过（链上存在非默认项）。
+
+    结构事实：``any(mod != "__default__" for _, mod, _ in chain)``。
+    """
+    cls, key = _resolve_impl_key(method)
+    chain = _impl_chain.get((cls, key), [])
+    return any(source_module != "__default__" for _func, source_module, _seq in chain)
+
+
+def impl_is_own(method: Any) -> bool:
+    """chain[0] 是该类在自己类体里写的 ``def``。
+
+    True 意味着：当前 cls 的链底层是用户函数（非框架 delegate）。
+    False 意味着：chain[0] 是 framework delegate，或根本没有 chain。
+
+    与 ``impl_is_inherited`` 互斥（在 chain 存在时）。命名借鉴 JS
+    ``Object.hasOwn`` 的「自家的」直觉。
+    """
     cls, key = _resolve_impl_key(method)
     chain = _impl_chain.get((cls, key), [])
     if not chain:
         return False
-    top_func, top_module, _seq = chain[-1]
-    if top_module != "__default__":
-        return True
-    return _default_impl_has_behavior(top_func)
+    return not getattr(chain[0][0], "__mutobj_is_delegate__", False)
 
 
-def impl_has_override(method: Any) -> bool:
-    """判断声明方法当前是否存在非默认链底的覆盖实现。"""
+def impl_is_inherited(method: Any) -> bool:
+    """chain[0] 是 framework 生成的继承委派。
+
+    True 意味着：当前 cls 自己没在类体写这个 method，框架自动生成 delegate 转发
+    到父类的实现。False 意味着：chain[0] 是用户自己在类体写的，或根本没有 chain。
+    """
     cls, key = _resolve_impl_key(method)
     chain = _impl_chain.get((cls, key), [])
-    return any(source_module != "__default__" for _func, source_module, _seq in chain)
+    if not chain:
+        return False
+    return bool(getattr(chain[0][0], "__mutobj_is_delegate__", False))
 
 
 def impl_chain(method: Any) -> list[tuple[Callable[..., Any], str, int]]:
@@ -1450,12 +1442,10 @@ def impl_call_super(
                     f"No super implementation for {cls.__name__}.{key} "
                     f"below module {mod!r}"
                 )
-            prev_func, prev_module, _prev_seq = chain[i - 1]
-            if prev_module == "__default__" and not _default_impl_has_behavior(prev_func):
-                raise NotImplementedError(
-                    f"No super implementation for {cls.__name__}.{key} "
-                    f"below module {mod!r}"
-                )
+            prev_func, _prev_module, _prev_seq = chain[i - 1]
+            # 设计纲线硬约束：框架不扫函数体，不再判断上一项是否是「实现」，
+            # 直接调用即可。若上一项本身是 ``raise NotImplementedError``的 stub，
+            # 由用户函数自己抛出 NotImplementedError。
             return prev_func(*args, **kwargs)
     raise RuntimeError(
         f"impl_call_super({cls.__name__}.{key}) must be called from within "

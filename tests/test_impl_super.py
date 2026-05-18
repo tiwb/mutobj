@@ -85,6 +85,12 @@ class TestBasicChain:
 class TestErrors:
 
     def test_super_at_chain_bottom_raises(self):
+        """链底为用户 ``raise NotImplementedError`` 的 def 时，调 super 则用户函数
+        自己抛出 NotImplementedError。
+
+        设计纲线硬约束：框架不扫函数体，不能提前代用户报「No super implementation」；
+        调用后用户函数自身会报出同类型异常。
+        """
         class Svc(mutobj.Declaration):
             def run(self) -> str:
                 raise NotImplementedError
@@ -99,7 +105,7 @@ class TestErrors:
         )
 
         try:
-            with pytest.raises(NotImplementedError, match="No super implementation"):
+            with pytest.raises(NotImplementedError):
                 Svc().run()
         finally:
             unregister_module_impls("super_bottom_mod")
