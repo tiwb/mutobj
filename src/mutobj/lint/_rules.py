@@ -20,6 +20,7 @@ R001 规则实现：声明 / 实现风格混合检测
 from __future__ import annotations
 
 import ast
+import re
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -29,7 +30,9 @@ if TYPE_CHECKING:
 
 
 R001 = "R001"
+R002 = "R002"
 SEVERITY_ERROR = "error"
+SEVERITY_WARNING = "warning"
 
 
 def check_r001(
@@ -37,8 +40,13 @@ def check_r001(
     tree: ast.AST,
     file_info: "FileAnalysis",
     resolver: "DeclarationResolver",  # noqa: ARG001 — 预留扩展
+    impl_pairs: dict[Path, tuple[str, str]] | None = None,
 ) -> list["LintMessage"]:
-    """对单文件执行 R001 检测"""
+    """对单文件执行 R001 检测。
+
+    若 impl_pairs 非空且 path 在其中，说明该文件是 decl-impl 配对的声明侧，
+    则额外要求所有 Declaration 子类必须是纯声明类（全 ... 桩）。
+    """
     from mutobj.lint._api import LintMessage  # 延迟 import 打破循环
 
     messages: list[LintMessage] = []
@@ -80,6 +88,24 @@ def check_r001(
                     f"文件级风格混合：Declaration 子类 {name!r} 是 "
                     f"{_label(category)}；同文件内同时存在声明类和实现类，"
                     "一个文件应当全是声明或全是实现"
+                ),
+                severity=SEVERITY_ERROR,
+            ))
+
+    # decl-impl 配对约束：声明侧文件中的所有 Declaration 子类必须是纯声明类
+    if impl_pairs is not None and path in impl_pairs:
+        for name, cls, category in file_class_categories:
+            if category in ("declaration", "behaviorless"):
+                continue
+            messages.append(LintMessage(
+                path=str(path),
+                line=cls.lineno,
+                column=cls.col_offset,
+                rule_id=R001,
+                message=(
+                    f"Declaration 子类 {name!r} 包含实现方法（非 ... 桩）；"
+                    "同目录存在对应 _impl 文件，声明文件中的方法应全为 ... 桩，"
+                    "实现应写在 _impl 文件中"
                 ),
                 severity=SEVERITY_ERROR,
             ))
@@ -186,3 +212,210 @@ def _is_overload(func: ast.FunctionDef | ast.AsyncFunctionDef) -> bool:
 
 def _label(category: str) -> str:
     return {"declaration": "声明类", "implementation": "实现类"}.get(category, category)
+
+
+# ============================================================ R002
+
+
+def check_r002(
+    path: Path,
+    tree: ast.AST,
+    impl_pairs: dict[Path, tuple[str, str]] | None,
+    source_lines: list[str] | None = None,
+) -> list["LintMessage"]:
+    """检查声明文件是否在末尾 import 了对应的 _impl 模块。
+
+    impl_pairs: {decl_path: (impl_full_module_name, decl_package)}，如
+        {Path(".../view.py"): ("mutio.mcp._view_impl", "mutio.mcp")}
+    source_lines: 源码行列表，用于检查 import 行的 noqa 注释
+    """
+    if impl_pairs is None or path not in impl_pairs:
+        return []
+
+    if not isinstance(tree, ast.Module) or not tree.body:
+        return []
+
+    expected_module, decl_package = impl_pairs[path]
+    last_stmt = tree.body[-1]
+
+    if not _is_import_of(last_stmt, expected_module, decl_package):
+        return [_missing_import_msg(path, last_stmt, expected_module)]
+
+    # Import found — run sub-checks
+    messages: list["LintMessage"] = []
+
+    # 1. noqa 注释检查（所有 import 形式）
+    if source_lines is not None:
+        messages.extend(_check_r002_noqa(path, last_stmt, source_lines))
+
+    # 2. as 别名检查（仅 from . import 形式）
+    messages.extend(_check_r002_alias(path, last_stmt, expected_module, decl_package))
+
+    # 3. 间距检查
+    messages.extend(_check_r002_spacing(path, tree))
+
+    return messages
+
+
+def _missing_import_msg(
+    path: Path,
+    last_stmt: ast.stmt,
+    expected_module: str,
+) -> "LintMessage":
+    from mutobj.lint._api import LintMessage
+    return LintMessage(
+        path=str(path),
+        line=(last_stmt.end_lineno or last_stmt.lineno) + 1,
+        column=0,
+        rule_id=R002,
+        message=(
+            f"同目录存在 _impl 模块 {expected_module!r}，"
+            "建议在文件末尾添加 import 以触发 @impl 注册"
+        ),
+        severity=SEVERITY_WARNING,
+    )
+
+
+def _check_r002_spacing(
+    path: Path,
+    tree: ast.Module,
+) -> list["LintMessage"]:
+    """检查末尾 import 与前一定义之间是否有 2 个空行。"""
+    from mutobj.lint._api import LintMessage
+    if len(tree.body) < 2:
+        return []
+    last_stmt = tree.body[-1]
+    prev_stmt = tree.body[-2]
+    prev_end = prev_stmt.end_lineno or prev_stmt.lineno
+    gap = last_stmt.lineno - prev_end
+    if gap == 3:
+        return []
+    return [LintMessage(
+        path=str(path),
+        line=last_stmt.lineno,
+        column=last_stmt.col_offset,
+        rule_id=R002,
+        message=(
+            f"末尾 import 前应有 2 个空行（当前 {gap - 1} 个），"
+            "与前一定义之间需保持两个空行"
+        ),
+        severity=SEVERITY_WARNING,
+    )]
+
+
+def _is_import_of(stmt: ast.stmt, expected_module: str, decl_package: str) -> bool:
+    """判断一条 statement 是否 import 了指定模块。
+
+    匹配以下形式：
+        import mutio.mcp._view_impl
+        import mutio.mcp._view_impl as _wip
+        from mutio.mcp._view_impl import ...
+        from mutio.mcp import _view_impl
+        from . import _view_impl
+    """
+    if isinstance(stmt, ast.Import):
+        for alias in stmt.names:
+            if alias.name == expected_module:
+                return True
+    elif isinstance(stmt, ast.ImportFrom):
+        if stmt.module is None:
+            # from . import _xxx_impl
+            if stmt.level == 1:
+                for alias in stmt.names:
+                    if decl_package + "." + alias.name == expected_module:
+                        return True
+            return False
+        if stmt.level == 0:
+            # from mutio.mcp._view_impl import ...
+            if stmt.module == expected_module:
+                return True
+            # from mutio.mcp import _view_impl
+            for alias in stmt.names:
+                if stmt.module + "." + alias.name == expected_module:
+                    return True
+        # relative import with module (e.g. from . import xxx) already handled above
+        # higher-level relative imports not supported for now
+    return False
+
+
+def _check_r002_noqa(
+    path: Path,
+    stmt: ast.stmt,
+    source_lines: list[str],
+) -> list["LintMessage"]:
+    """检查 import 行是否有 ``# noqa: F401, E402`` 注释。
+
+    抑制目标：flake8/ruff 的 F401（unused import）和 E402（import not at top）。
+    """
+    from mutobj.lint._api import LintMessage
+
+    line_idx = stmt.lineno - 1
+    if line_idx >= len(source_lines):
+        return []
+
+    line = source_lines[line_idx]
+
+    # 查找 # noqa: ... 注释
+    m = re.search(r'#\s*noqa[:]\s*([A-Z0-9,\s]*)', line)
+    if not m:
+        return [LintMessage(
+            path=str(path),
+            line=stmt.lineno,
+            column=stmt.col_offset,
+            rule_id=R002,
+            message="末尾 import 行缺少 # noqa: F401, E402 注释",
+            severity=SEVERITY_WARNING,
+        )]
+
+    codes = [c.strip() for c in m.group(1).split(",") if c.strip()]
+    missing: list[str] = []
+    if "F401" not in codes:
+        missing.append("F401")
+    if "E402" not in codes:
+        missing.append("E402")
+    if missing:
+        return [LintMessage(
+            path=str(path),
+            line=stmt.lineno,
+            column=stmt.col_offset,
+            rule_id=R002,
+            message=f"末尾 import 行 noqa 注释缺少 {'，'.join(missing)}",
+            severity=SEVERITY_WARNING,
+        )]
+    return []
+
+
+def _check_r002_alias(
+    path: Path,
+    stmt: ast.stmt,
+    expected_module: str,
+    decl_package: str,
+) -> list["LintMessage"]:
+    """检查 ``from . import _xxx_impl`` 是否有 ``as _xxx_impl`` 别名。
+
+    只检查相对 import（``module is None, level == 1``）。
+    别名抑制 pyright ``reportUnusedImport``。
+    """
+    from mutobj.lint._api import LintMessage
+
+    if not isinstance(stmt, ast.ImportFrom):
+        return []
+    if stmt.module is not None or stmt.level != 1:
+        return []
+
+    for alias in stmt.names:
+        if decl_package + "." + alias.name == expected_module:
+            if alias.asname is None or alias.asname != alias.name:
+                return [LintMessage(
+                    path=str(path),
+                    line=stmt.lineno,
+                    column=stmt.col_offset,
+                    rule_id=R002,
+                    message=(
+                        f"末尾 import 应使用 as 别名抑制 pyright reportUnusedImport："
+                        f"from . import {alias.name} as {alias.name}"
+                    ),
+                    severity=SEVERITY_WARNING,
+                )]
+            return []
+    return []
