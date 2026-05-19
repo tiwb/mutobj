@@ -218,22 +218,21 @@ Extension 泛型基类，用于为 Declaration 子类提供扩展功能和私有
 
 ```python
 class UserExt(mutobj.Extension[User]):
-    _counter: int = 0
-    _history: list = mutobj.field(default_factory=list)
+    counter: int = 0
+    history: list = mutobj.field(default_factory=list)
 
     def __init__(self):
         """可选：初始化钩子（self._instance 和 field 值均已可用）"""
         if self._instance.name:
-            self._history.append(f"created for {self._instance.name}")
+            self.history.append(f"created for {self._instance.name}")
 
-    def _helper(self) -> str:
-        """私有辅助方法"""
-        return f"Counter: {self._counter}"
+    def summary(self) -> str:
+        """扩展的辅助方法"""
+        return f"Counter: {self.counter}"
 ```
 
 **特性：**
 - 通过 `Extension[TargetClass]` 语法绑定目标类并自动注册
-- 支持私有状态（`_` 前缀属性存储在 Extension 实例上）
 - 可通过 `self.attr` 访问目标实例的公共属性
 - 支持 `field(default_factory=...)` 声明可变默认值
 - `__init__` 中可访问 `self._instance` 和所有 field 值
@@ -256,8 +255,8 @@ class UserExt(mutobj.Extension[User]):
 @mutobj.impl(User.greet)
 def greet(self: User) -> str:
     ext = UserExt.get_or_create(self)
-    ext._counter += 1
-    return f"Hello, {self.name}! (called {ext._counter} times)"
+    ext.counter += 1
+    return f"Hello, {self.name}! (called {ext.counter} times)"
 ```
 
 ---
@@ -278,7 +277,7 @@ def greet(self: User) -> str:
 def maybe_use_cache(user: User) -> str | None:
     ext = UserCacheExt.get(user)
     if ext is not None:
-        return ext._cached_result
+        return ext.cached_result
     return None
 ```
 
@@ -304,7 +303,7 @@ for ext in mutobj.extensions(user):
 
 # 按接口过滤
 for ext in mutobj.extensions(user, Serializable):
-    data.update(ext._serialize())
+    data.update(ext.serialize())
 ```
 
 ---

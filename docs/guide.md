@@ -66,7 +66,7 @@ class Config(mutobj.Declaration):
     api_key: str | None = None
     tags: list[str] = mutobj.field(default_factory=list)   # 可变默认值，必须 field()
     headers: dict[str, str] = mutobj.field(default_factory=dict)
-    _internal: int = mutobj.field(default=0, init=False)   # 不进 __init__
+    counter: int = mutobj.field(default=0, init=False)      # 不进 __init__
 ```
 
 **规则**：
@@ -340,10 +340,10 @@ from typing import Self
 # 声明
 class Product(mutobj.Declaration):
     name: str
-    _price: float = 0.0
+    price: float = 0.0
 
     @property
-    def price(self) -> float: ...
+    def tax(self) -> float: ...   # 计算属性，无需 _ 前缀的 backing field
 
     @classmethod
     def from_dict(cls, data: dict) -> Self: ...   # PEP 673：返回自身类型，子类继承时自动收窄
@@ -352,18 +352,13 @@ class Product(mutobj.Declaration):
     def validate_name(name: str) -> bool: ...
 
 # 实现
-@mutobj.impl(Product.price.getter)
-def get_price(self: Product) -> float:
-    return self._price
-
-@mutobj.impl(Product.price.setter)
-def set_price(self: Product, value: float) -> None:
-    if value < 0: raise ValueError
-    self._price = value
+@mutobj.impl(Product.tax.getter)
+def get_tax(self: Product) -> float:
+    return self.price * 0.08
 
 @mutobj.impl(Product.from_dict)
 def from_dict(cls, data: dict) -> Product:
-    return cls(name=data["name"], _price=data["price"])
+    return cls(name=data["name"], price=data["price"])
 
 @mutobj.impl(Product.validate_name)
 def validate_name(name: str) -> bool:
@@ -409,26 +404,6 @@ from . import _user_impl as _user_impl   # noqa: F401
 ```
 
 `as _user_impl` 是为了避开 IDE 的 unused-import 警告。
-
----
-
-## `@impl` 与基类 protected 成员
-
-`@impl` 函数物理上位于独立模块（通常是 `_*_impl.py`），不在 Declaration 类体内。当实现里调用 `self._helper()` 这类基类 protected 成员时，pyright strict 模式会报 `reportPrivateUsage`——这是 pyright 词法作用域规则的正确执行，mutobj 框架层无法消解。
-
-**标准绕行：文件级抑制**
-
-```python
-# _menu_impl.py
-# pyright: reportPrivateUsage=false
-"""..."""
-```
-
-`_*_impl.py` 按约定就是 Declaration 类的实现延伸，访问基类 protected helper 在语义上属「类内访问」，关掉该检查不会漏过真正的违规。
-
-**严谨场景**
-
-若不接受任何漏检，需要在使用者侧重新设计——例如把 helper 重新组织为模块级公开函数、独立辅助类等。mutobj 不为此提供框架层方案。
 
 ---
 
