@@ -15,7 +15,7 @@ from mutobj.lint._api import LintMessage, lint_directory, lint_file
 def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="mutobj-lint",
-        description="mutobj 风格静态检查（R001 声明/实现风格混合检测，R002 声明文件底部 _impl import 检查）",
+        description="mutobj 代码风格与命名规范静态检查",
     )
     parser.add_argument(
         "paths",

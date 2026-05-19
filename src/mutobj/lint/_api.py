@@ -11,7 +11,7 @@ from pathlib import Path
 from typing import Iterable
 
 from mutobj.lint._resolver import DeclarationResolver
-from mutobj.lint._rules import check_r001, check_r002
+from mutobj.lint._rules import check_r001, check_r002, check_r003
 
 # 默认排除的目录名（任意层级匹配目录名即跳过）
 _DEFAULT_EXCLUDES: frozenset[str] = frozenset({
@@ -92,6 +92,7 @@ def _lint_one(
     file_info = resolver.analyze_file(path, tree=tree)
     messages = check_r001(path, tree, file_info, resolver, impl_pairs=impl_pairs)
     messages.extend(check_r002(path, tree, impl_pairs, source_lines=source.splitlines()))
+    messages.extend(check_r003(path, tree, source_lines=source.splitlines()))
     return messages
 
 

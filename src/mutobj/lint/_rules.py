@@ -31,6 +31,7 @@ if TYPE_CHECKING:
 
 R001 = "R001"
 R002 = "R002"
+R003 = "R003"
 SEVERITY_ERROR = "error"
 SEVERITY_WARNING = "warning"
 
@@ -419,3 +420,167 @@ def _check_r002_alias(
                 )]
             return []
     return []
+
+
+# ============================================================ R003
+
+
+def _camel_to_snake(name: str) -> str:
+    """CamelCase → snake_case 转换。
+
+    在 小写→大写 和 大写→大写+小写（结尾缩略词） 处插入 _。
+    """
+    s = re.sub(r"(?<=[a-z])(?=[A-Z])|(?<=[A-Z])(?=[A-Z][a-z])", "_", name)
+    return s.lower()
+
+
+def _extract_type_name(decorator: ast.Call) -> str | None:
+    """从 @impl(Cls.method) 或 @mutobj.impl(Cls.method) 中提取类型名。
+
+    链式引用如 nested.Cls.method 取最后一节类型名（Cls）。
+    非链式引用（如函数调用、变量）返回 None。
+    """
+    if not decorator.args:
+        return None
+    arg = decorator.args[0]
+    if not isinstance(arg, ast.Attribute):
+        return None
+    # 收集 Attribute 链的 attr（从外到内）
+    chain: list[str] = []
+    node: ast.expr = arg
+    while isinstance(node, ast.Attribute):
+        chain.append(node.attr)
+        node = node.value
+    if isinstance(node, ast.Name):
+        if len(chain) == 1:
+            # View.get → 类型名取 Name.id = "View"
+            return node.id
+        # pkg.nested.Handler.method → 类型名取链中倒数第二节 = "Handler"
+        return chain[-2]
+    return None
+
+
+def check_r003(
+    path: Path,
+    tree: ast.AST,
+    source_lines: list[str] | None = None,
+) -> list["LintMessage"]:
+    """检查 _*_impl.py 中 @impl 装饰的函数规范。
+
+    R003a：@impl 函数不得以 _ 开头（消除 pyright reportUnusedFunction 误报）。
+    R003b：@impl 函数名必须以 snake_case(类型名) 开头（保留类型 namespace）。
+
+    仅对文件名匹配 _*_impl.py 的文件执行检测。
+    识别 @impl(...) 和 @mutobj.impl(...) 两种装饰器形式。
+    """
+    # 仅 _*_impl.py 文件
+    if not path.name.startswith("_") or not path.name.endswith("_impl.py"):
+        return []
+
+    if not isinstance(tree, ast.Module):
+        return []
+
+    # 收集 impl 的绑定名（支持 import mutobj / from mutobj import impl / as 别名）
+    impl_bindings: set[str] = set()
+    for node in tree.body:
+        if isinstance(node, ast.Import):
+            for alias in node.names:
+                if alias.name == "mutobj":
+                    impl_bindings.add(alias.asname or "mutobj")
+        elif isinstance(node, ast.ImportFrom):
+            if node.module == "mutobj":
+                for alias in node.names:
+                    if alias.name == "impl":
+                        impl_bindings.add(alias.asname or "impl")
+
+    if not impl_bindings:
+        return []
+
+    # 遍历所有函数定义
+    messages: list["LintMessage"] = []
+    for node in ast.walk(tree):
+        if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            continue
+        if not node.decorator_list:
+            continue
+
+        # 检查装饰器链中是否有 @impl 引用
+        impl_call: ast.Call | None = None
+        for decorator in node.decorator_list:
+            if isinstance(decorator, ast.Call) and _is_impl_call(decorator, impl_bindings):
+                impl_call = decorator
+                break
+        if impl_call is None:
+            continue
+
+        # --- R003a: _ 前缀检测 ---
+        pyright_ignored = False
+        if source_lines is not None:
+            line_idx = node.lineno - 1
+            if line_idx < len(source_lines):
+                line = source_lines[line_idx]
+                if re.search(
+                    r"#\s*pyright:\s*ignore\[reportUnusedFunction\]", line
+                ):
+                    pyright_ignored = True
+
+        r003a_fired = False
+        if node.name.startswith("_") and not pyright_ignored:
+            from mutobj.lint._api import LintMessage
+
+            r003a_fired = True
+            messages.append(LintMessage(
+                path=str(path),
+                line=node.lineno,
+                column=node.col_offset,
+                rule_id=R003,
+                message=(
+                    f"@impl 函数 {node.name!r} 不应使用 _ 前缀；"
+                    "去掉 _ 以消除 pyright reportUnusedFunction 误报"
+                ),
+                severity=SEVERITY_WARNING,
+            ))
+
+        # --- R003b: 类型名前缀检测 ---
+        # pyright: ignore 注释同时豁免 R003a 和 R003b；R003a 已报时跳 R003b（冗余）
+        if not pyright_ignored and not r003a_fired:
+            type_name = _extract_type_name(impl_call)
+            if type_name is not None:
+                snake_type = _camel_to_snake(type_name)
+                func_name = node.name
+                # 通过条件：函数名 == snake_type 或以 snake_type_ 开头
+                if func_name != snake_type and not func_name.startswith(snake_type + "_"):
+                    from mutobj.lint._api import LintMessage
+
+                    messages.append(LintMessage(
+                        path=str(path),
+                        line=node.lineno,
+                        column=node.col_offset,
+                        rule_id=R003,
+                        message=(
+                            f"@impl 函数 {func_name!r} 缺少类型名前缀；"
+                            f"函数名应以 {snake_type!r} 开头"
+                        ),
+                        severity=SEVERITY_WARNING,
+                    ))
+
+    return messages
+
+
+def _is_impl_call(decorator: ast.expr, impl_bindings: set[str]) -> bool:
+    """检查装饰器是否为 @impl(...) 或 @mutobj.impl(...)"""
+    if not isinstance(decorator, ast.Call):
+        return False
+    func = decorator.func
+    # @impl(...)  → func 是 Name(id="impl")
+    if isinstance(func, ast.Name) and func.id in impl_bindings:
+        return True
+    # @mutobj.impl(...) → func 是 Attribute(value=Name(id="mutobj"), attr="impl")
+    if (
+        isinstance(func, ast.Attribute)
+        and func.attr == "impl"
+        and isinstance(func.value, ast.Name)
+        and func.value.id in impl_bindings
+    ):
+        return True
+    return False

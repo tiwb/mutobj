@@ -76,7 +76,7 @@ class JSONResponse(mutobj.Declaration):
     def __post_init__(self) -> None: ...
 
 @mutobj.impl(JSONResponse.__post_init__)
-def _json_response_post_init(self: JSONResponse) -> None:
+def json_response_post_init(self: JSONResponse) -> None:
     self.summary = f"keys={sorted(self.content)}"
 ```
 
@@ -120,7 +120,7 @@ def greet(self: User) -> str:
 
 ## Lint 工具
 
-mutobj 内置静态检查工具 `mutobj-lint`，检测《声明 / 实现风格不可混合》约定。
+mutobj 内置静态检查工具 `mutobj-lint`，检测 mutobj 代码风格与命名规范约定。
 
 安装 mutobj 后，`mutobj-lint` 会被自动装到 PATH：
 
