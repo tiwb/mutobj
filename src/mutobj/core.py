@@ -1806,7 +1806,7 @@ def get_declaration_doc(cls: type, method_name: str) -> str | None:
     """获取 Declaration 类中方法的声明 docstring。
 
     @impl 会覆盖类方法（包括 __doc__），此函数从 _impl_chain 中
-    取回声明时的原始 docstring。
+    取回声明时的原始 docstring。沿 MRO 遍历，支持从父类继承的声明方法。
 
     Args:
         cls: Declaration 子类
@@ -1815,12 +1815,15 @@ def get_declaration_doc(cls: type, method_name: str) -> str | None:
     Returns:
         声明的 docstring，如果没有则返回 None
     """
-    chain = _impl_chain.get((cls, method_name))
-    if not chain:
-        return None
-    for func, source_module, _seq in chain:
-        if source_module == "__default__":
-            return getattr(func, "__doc__", None)
+    for klass in cls.__mro__:
+        chain = _impl_chain.get((klass, method_name))
+        if not chain:
+            continue
+        for func, source_module, _seq in chain:
+            if source_module == "__default__":
+                doc = getattr(func, "__doc__", None)
+                if doc is not None:
+                    return doc
     return None
 
 
