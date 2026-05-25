@@ -17,7 +17,7 @@ __all__ = ["Declaration", "Extension", "impl", "impl_call_super", "call_super_im
            "impl_meta", "impl_meta_of",
            "unregister_module_impls", "field", "MISSING",
            "discover_subclasses", "get_registry_generation", "resolve_class",
-           "extensions", "extension_types", "field_default", "field_info", "fields"]
+           "extensions", "extension_types", "get_declaration_func", "get_declaration_doc", "field_default", "field_info", "fields"]
 
 # 类型变量
 T = TypeVar("T", bound="Declaration")
@@ -1802,11 +1802,33 @@ def get_registry_generation() -> int:
     return _registry_generation
 
 
+def get_declaration_func(cls: type, method_name: str) -> Callable[..., Any] | None:
+    """获取 Declaration 类中方法的声明原始函数。
+
+    @impl 会覆盖类方法，此函数从 _impl_chain 中取回声明时的原始函数。
+    沿 MRO 遍历，支持从父类继承的声明方法。
+
+    Args:
+        cls: Declaration 子类
+        method_name: 方法名
+
+    Returns:
+        声明的原始函数，如果没有则返回 None
+    """
+    for klass in cls.__mro__:
+        chain = _impl_chain.get((klass, method_name))
+        if not chain:
+            continue
+        for func, source_module, _seq in chain:
+            if source_module == "__default__":
+                return func
+    return None
+
+
 def get_declaration_doc(cls: type, method_name: str) -> str | None:
     """获取 Declaration 类中方法的声明 docstring。
 
-    @impl 会覆盖类方法（包括 __doc__），此函数从 _impl_chain 中
-    取回声明时的原始 docstring。沿 MRO 遍历，支持从父类继承的声明方法。
+    委托给 get_declaration_func 取回原始函数，再提取 __doc__。
 
     Args:
         cls: Declaration 子类
@@ -1815,15 +1837,9 @@ def get_declaration_doc(cls: type, method_name: str) -> str | None:
     Returns:
         声明的 docstring，如果没有则返回 None
     """
-    for klass in cls.__mro__:
-        chain = _impl_chain.get((klass, method_name))
-        if not chain:
-            continue
-        for func, source_module, _seq in chain:
-            if source_module == "__default__":
-                doc = getattr(func, "__doc__", None)
-                if doc is not None:
-                    return doc
+    func = get_declaration_func(cls, method_name)
+    if func is not None:
+        return getattr(func, "__doc__", None)
     return None
 
 
