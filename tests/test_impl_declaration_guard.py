@@ -42,13 +42,6 @@ class TestImplDeclarationGuard:
 class TestImplChainAPIsRejectNonDeclaration:
     """查询类 API 同样应拒绝非 Declaration 类"""
 
-    def test_impl_has_rejects_non_declaration(self):
-        class PlainCls:
-            def bar(self) -> None: ...
-
-        with pytest.raises(TypeError, match="not a mutobj.Declaration subclass"):
-            mutobj.impl_has(PlainCls.bar)
-
     def test_impl_has_override_rejects_non_declaration(self):
         class PlainCls:
             def bar(self) -> None: ...

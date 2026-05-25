@@ -667,6 +667,112 @@ class TestR001PairedDeclEnforcement:
         assert msgs == []
 
 
+# ============================================================ R001: yield ... 桩（generator / async generator）
+
+
+class TestR001YieldStub:
+    def test_yield_ellipsis_as_stub_in_declaration_class(
+        self, tmp_path: Path,
+    ) -> None:
+        """声明类中 `yield ...` 方法应识别为桩，不报警"""
+        pkg = make_pkg(tmp_path)
+        f = write(pkg, "decl.py", """
+            from mutobj import Declaration
+
+            class Foo(Declaration):
+                def m1(self) -> int: ...
+                def m2(self):
+                    yield ...
+                def m3(self, x: int) -> str: ...
+        """)
+        assert lint_file(f) == []
+
+    def test_async_yield_ellipsis_as_stub(
+        self, tmp_path: Path,
+    ) -> None:
+        """声明类中 `async def ... yield ...` 应识别为桩"""
+        pkg = make_pkg(tmp_path)
+        f = write(pkg, "decl.py", """
+            from mutobj import Declaration
+
+            class Foo(Declaration):
+                async def stream(self):
+                    yield ...
+                def method_a(self) -> int: ...
+        """)
+        assert lint_file(f) == []
+
+    def test_yield_ellipsis_with_docstring_as_stub(
+        self, tmp_path: Path,
+    ) -> None:
+        """`yield ...` 桩方法带 docstring，应识别为桩"""
+        pkg = make_pkg(tmp_path)
+        f = write(pkg, "decl.py", """
+            from mutobj import Declaration
+
+            class Foo(Declaration):
+                def send(self):
+                    \"\"\"发送请求，返回流式事件\"\"\"
+                    yield ...
+                def method_a(self) -> int: ...
+        """)
+        assert lint_file(f) == []
+
+    def test_bare_yield_is_implementation(self, tmp_path: Path) -> None:
+        """裸 `yield`（无 `...`）是实现方法，非桩"""
+        pkg = make_pkg(tmp_path)
+        f = write(pkg, "bad.py", """
+            from mutobj import Declaration
+
+            class Foo(Declaration):
+                def gen(self):
+                    yield
+                def m(self) -> int: ...
+        """)
+        msgs = lint_file(f)
+        assert len(msgs) == 1
+        assert msgs[0].rule_id == "R001"
+        assert "gen" in msgs[0].message
+
+    def test_yield_ellipsis_mixed_with_real_impl_reports(
+        self, tmp_path: Path,
+    ) -> None:
+        """`yield ...` 桩 + 真正实现方法 → 类级混合 R001"""
+        pkg = make_pkg(tmp_path)
+        f = write(pkg, "bad.py", """
+            from mutobj import Declaration
+
+            class Foo(Declaration):
+                def stub_gen(self):
+                    yield ...
+                def real_impl(self) -> int:
+                    return 1
+        """)
+        msgs = lint_file(f)
+        assert len(msgs) == 1
+        assert msgs[0].rule_id == "R001"
+        assert "类级" in msgs[0].message
+        assert "real_impl" in msgs[0].message
+
+    def test_yield_non_ellipsis_is_implementation(
+        self, tmp_path: Path,
+    ) -> None:
+        """`yield 42` 不是桩 → 是实现方法"""
+        pkg = make_pkg(tmp_path)
+        f = write(pkg, "bad.py", """
+            from mutobj import Declaration
+
+            class Foo(Declaration):
+                def gen(self):
+                    yield 42
+                def stub_m(self) -> int: ...
+        """)
+        msgs = lint_file(f)
+        assert len(msgs) == 1
+        assert msgs[0].rule_id == "R001"
+        assert "gen" in msgs[0].message
+
+
 # ============================================================ Dogfooding
 
 

@@ -161,6 +161,13 @@ def main(argv: list[str] | None = None) -> int:
         if text:
             print(text)
 
+        # 汇总行（始终输出，模拟 pyright）
+        error_count = sum(1 for m in all_msgs if m.severity == "error")
+        warning_count = sum(1 for m in all_msgs if m.severity == "warning")
+        err_plural = "" if error_count == 1 else "s"
+        warn_plural = "" if warning_count == 1 else "s"
+        print(f"{error_count} error{err_plural}, {warning_count} warning{warn_plural}")
+
     has_error = any(m.severity == "error" for m in all_msgs)
     return 1 if has_error else 0
 

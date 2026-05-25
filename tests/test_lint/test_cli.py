@@ -30,7 +30,7 @@ class TestCLI:
         rc = cli_main([str(f)])
         captured = capsys.readouterr()
         assert rc == 0
-        assert captured.out.strip() == ""
+        assert "0 error" in captured.out
 
     def test_text_output_violations(
         self, tmp_path: Path, capsys: pytest.CaptureFixture[str],
@@ -124,7 +124,7 @@ class TestDefaultPath:
             rc = cli_main([])
         captured = capsys.readouterr()
         assert rc == 0
-        assert captured.out.strip() == ""
+        assert "0 error" in captured.out
 
     def test_no_args_with_violations(
         self, tmp_path: Path, capsys: pytest.CaptureFixture[str],
@@ -170,7 +170,7 @@ include = ["src"]
             rc = cli_main([])
         captured = capsys.readouterr()
         assert rc == 0
-        assert captured.out.strip() == ""
+        assert "0 error" in captured.out
 
     def test_config_include_with_violations(
         self, tmp_path: Path, capsys: pytest.CaptureFixture[str],

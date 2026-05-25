@@ -190,10 +190,15 @@ def _is_stub_body(func: ast.FunctionDef | ast.AsyncFunctionDef) -> bool:
     stmt = rest[0]
     if not isinstance(stmt, ast.Expr):
         return False
-    if not isinstance(stmt.value, ast.Constant):
-        return False
-    # `...` 的 Constant.value 是 Ellipsis
-    return stmt.value.value is Ellipsis
+    # `...` → ast.Constant(Ellipsis)
+    if isinstance(stmt.value, ast.Constant) and stmt.value.value is Ellipsis:
+        return True
+    # `yield ...`（generator / async generator 桩）
+    if isinstance(stmt.value, ast.Yield):
+        yv = stmt.value.value
+        if isinstance(yv, ast.Constant) and yv.value is Ellipsis:
+            return True
+    return False
 
 
 def _is_overload(func: ast.FunctionDef | ast.AsyncFunctionDef) -> bool:
@@ -529,15 +534,40 @@ def check_r003(
             from mutobj.lint._api import LintMessage
 
             r003a_fired = True
+            # 尝试计算建议名称（含类型名前缀），一次给出完整命名建议
+            suggested_name: str | None = None
+            type_name = _extract_type_name(impl_call)
+            if type_name is not None:
+                snake_type = _camel_to_snake(type_name)
+                stripped = node.name.lstrip("_")
+                if stripped == snake_type or stripped.startswith(snake_type + "_"):
+                    # 去掉 _ 后已含类型名前缀
+                    suggested_name = stripped
+                else:
+                    # 同时缺少类型名前缀，补全
+                    suggested_name = snake_type + "_" + stripped
+
+            if suggested_name is not None and suggested_name != node.name.lstrip("_"):
+                message = (
+                    f"@impl 函数 {node.name!r} 不应使用 _ 前缀且缺少类型名前缀；"
+                    f"建议命名为 {suggested_name!r}"
+                )
+            elif suggested_name is not None:
+                message = (
+                    f"@impl 函数 {node.name!r} 不应使用 _ 前缀；"
+                    f"建议命名为 {suggested_name!r}"
+                )
+            else:
+                message = (
+                    f"@impl 函数 {node.name!r} 不应使用 _ 前缀；"
+                    "去掉 _ 以消除 pyright reportUnusedFunction 误报"
+                )
             messages.append(LintMessage(
                 path=str(path),
                 line=node.lineno,
                 column=node.col_offset,
                 rule_id=R003,
-                message=(
-                    f"@impl 函数 {node.name!r} 不应使用 _ 前缀；"
-                    "去掉 _ 以消除 pyright reportUnusedFunction 误报"
-                ),
+                message=message,
                 severity=SEVERITY_WARNING,
             ))
 
