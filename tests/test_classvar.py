@@ -52,14 +52,14 @@ class TestClassVarBasic:
             name: str = "foo"
 
         reg = _attribute_registry[Foo]
-        assert "_app" not in reg
+        assert "app" not in reg
         assert "name" in reg
 
     def test_classvar_without_default(self):
         class Foo(mutobj.Declaration):
             _app: ClassVar[int | None]
 
-        assert not hasattr(Foo, "_app")
+        assert not hasattr(Foo, "app")
 
     def test_classvar_default_factory_not_allowed(self):
         with pytest.raises(TypeError):
@@ -266,7 +266,7 @@ class TestClassVarInheritance:
             "from typing import ClassVar as CV\n"
             "import mutobj\n"
             "class Parent(mutobj.Declaration):\n"
-            "    _app: CV[str | None] = None\n",
+            "    app: CV[str | None] = None\n",
             "test_classvar_parent_mod",
             keep=True,
         )
@@ -277,13 +277,13 @@ class TestClassVarInheritance:
                 "import mutobj\n"
                 "from test_classvar_parent_mod import Parent\n"
                 "class Child(Parent):\n"
-                "    _app: str = 'child'\n",
+                "    app: str = 'child'\n",
                 "test_classvar_child_mod",
             )
             Child = child_ns["Child"]
-            assert Child._app == "child"
-            assert not isinstance(Child._app, AttributeDescriptor)
-            assert "_app" not in _attribute_registry[Child]
+            assert Child.app == "child"
+            assert not isinstance(Child.app, AttributeDescriptor)
+            assert "app" not in _attribute_registry[Child]
         finally:
             sys.modules.pop("test_classvar_parent_mod", None)
 
