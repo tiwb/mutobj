@@ -331,7 +331,7 @@ class TestFieldReflectionAPI:
         class Action(mutobj.Declaration):
             categories: tuple[str, ...] = ("a",)
 
-        from mutobj.core import AttributeDescriptor
+        from mutobj import AttributeDescriptor
 
         info = mutobj.field_info(Action.categories)
         assert isinstance(info, AttributeDescriptor)
@@ -354,7 +354,7 @@ class TestFieldReflectionAPI:
             order: int | None = None
             label: str = "x"
 
-        from mutobj.core import AttributeDescriptor
+        from mutobj import AttributeDescriptor
 
         result = mutobj.fields(Action)
         assert set(result.keys()) == {"categories", "order", "label"}
@@ -400,4 +400,3 @@ class TestFieldReflectionAPI:
             pass
 
         assert dict(mutobj.fields(Empty)) == {}
-

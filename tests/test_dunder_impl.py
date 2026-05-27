@@ -99,7 +99,7 @@ class TestReservedDunders:
 
         assert Child in called
         # 不应被注册为 declared method
-        from mutobj.core import _impl_chain
+        from mutobj.core._state import _impl_chain
         assert (Parent, "__init_subclass__") not in _impl_chain
 
 

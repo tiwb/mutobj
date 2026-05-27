@@ -5,7 +5,7 @@ import types
 
 import pytest
 import mutobj
-from mutobj.core import _class_registry
+from mutobj.core._state import _class_registry
 
 
 # 模块级 Declaration 子类，用于全路径测试

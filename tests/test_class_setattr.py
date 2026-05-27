@@ -4,7 +4,8 @@ import pytest
 
 import mutobj
 from mutobj import field
-from mutobj.core import _attribute_registry, _ordered_fields_cache, AttributeDescriptor
+from mutobj.core._fields import AttributeDescriptor, _ordered_fields_cache
+from mutobj.core._state import _attribute_registry
 
 
 class _SetAttrBase(mutobj.Declaration):

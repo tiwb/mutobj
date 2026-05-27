@@ -2,7 +2,7 @@
 
 import pytest
 import mutobj
-from mutobj.core import _impl_chain
+from mutobj.core._state import _impl_chain
 
 
 class TestImplDecorator:

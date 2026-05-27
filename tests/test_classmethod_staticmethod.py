@@ -2,7 +2,7 @@
 
 import pytest
 import mutobj
-from mutobj.core import _DECLARED_CLASSMETHODS, _DECLARED_STATICMETHODS
+from mutobj.core._constants import _DECLARED_CLASSMETHODS, _DECLARED_STATICMETHODS
 
 
 class TestClassmethodDeclaration:

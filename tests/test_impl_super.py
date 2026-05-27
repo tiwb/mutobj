@@ -5,7 +5,8 @@ from __future__ import annotations
 import asyncio
 import pytest
 import mutobj
-from mutobj.core import _impl_chain, unregister_module_impls
+from mutobj import unregister_module_impls
+from mutobj.core._state import _impl_chain
 
 
 def _make_module(module_name: str) -> dict:

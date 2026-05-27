@@ -2,12 +2,8 @@
 
 import pytest
 import mutobj
-from mutobj.core import (
-    _class_registry,
-    _impl_chain,
-    _attribute_registry,
-    _DECLARED_METHODS,
-)
+from mutobj.core._constants import _DECLARED_METHODS
+from mutobj.core._state import _attribute_registry, _class_registry, _impl_chain
 
 
 def _exec_class(source: str, module_name: str = "test_virtual"):

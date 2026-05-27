@@ -7,7 +7,8 @@ import pytest
 from typing import ClassVar
 
 import mutobj
-from mutobj.core import _attribute_registry, AttributeDescriptor
+from mutobj.core._fields import AttributeDescriptor
+from mutobj.core._state import _attribute_registry
 
 
 def _exec_module(source: str, module_name: str, *, keep: bool = False) -> dict:

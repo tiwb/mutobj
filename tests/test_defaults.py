@@ -4,7 +4,8 @@ import pytest
 
 import mutobj
 from mutobj import field
-from mutobj.core import _attribute_registry, AttributeDescriptor, _MISSING
+from mutobj.core._fields import AttributeDescriptor, _MISSING
+from mutobj.core._state import _attribute_registry
 
 
 # ── 基本默认值 ──────────────────────────────────────────────────

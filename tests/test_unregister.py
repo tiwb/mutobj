@@ -2,11 +2,9 @@
 
 import pytest
 import mutobj
-from mutobj.core import (
-    _impl_chain,
-    _DECLARED_METHODS,
-    unregister_module_impls,
-)
+from mutobj import unregister_module_impls
+from mutobj.core._constants import _DECLARED_METHODS
+from mutobj.core._state import _impl_chain
 
 
 class TestImplSourceTracking:

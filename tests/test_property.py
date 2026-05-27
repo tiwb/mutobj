@@ -18,7 +18,7 @@ class TestPropertyDeclaration:
                 ...
 
         # 验证 property 被识别为声明
-        from mutobj.core import _DECLARED_PROPERTIES
+        from mutobj.core._constants import _DECLARED_PROPERTIES
         declared = getattr(User, _DECLARED_PROPERTIES, set())
         assert "display_name" in declared
 

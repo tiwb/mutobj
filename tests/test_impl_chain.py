@@ -2,11 +2,8 @@
 
 import pytest
 import mutobj
-from mutobj.core import (
-    _impl_chain,
-    _module_first_seq,
-    unregister_module_impls,
-)
+from mutobj import unregister_module_impls
+from mutobj.core._state import _impl_chain, _module_first_seq
 
 
 def _exec_class(source: str, module_name: str = "test_virtual"):
@@ -445,7 +442,7 @@ class TestDefaultImplVariants:
 
     def test_all_body_types_are_declared(self):
         """所有方法体形式都被识别为声明方法"""
-        from mutobj.core import _DECLARED_METHODS
+        from mutobj.core._constants import _DECLARED_METHODS
 
         class D4(mutobj.Declaration):
             def m1(self) -> str: ...

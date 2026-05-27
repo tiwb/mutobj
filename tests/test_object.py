@@ -2,7 +2,8 @@
 
 import pytest
 import mutobj
-from mutobj.core import _attribute_registry, _DECLARED_METHODS
+from mutobj.core._constants import _DECLARED_METHODS
+from mutobj.core._state import _attribute_registry
 
 
 class TestDeclarationDeclaration:
