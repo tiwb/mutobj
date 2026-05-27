@@ -1,11 +1,26 @@
 from __future__ import annotations
 
-from typing import Any, Callable
+# pyright: reportUnknownVariableType=false
+
+import weakref
+from typing import TYPE_CHECKING, Any, Callable
+
+if TYPE_CHECKING:
+    from ._declaration import Declaration
 
 _impl_chain: dict[tuple[type, str], list[tuple[Callable[..., Any], str, int]]] = {}
 _impl_seq: int = 0
 _module_first_seq: dict[tuple[type, str, str], int] = {}
 _impl_metas: dict[tuple[type, str, int], tuple[object, ...]] = {}
+
+_implementation_class_registry: dict[type[Declaration], type] = {}
+_implementation_instance_registry: weakref.WeakKeyDictionary[Declaration, object] = (
+    weakref.WeakKeyDictionary()
+)
+_implementation_owner_registry: dict[
+    int,
+    tuple[weakref.ReferenceType[Declaration], Any],
+] = {}
 
 _attribute_registry: dict[type, dict[str, Any]] = {}
 _classvar_registry: dict[type, set[str]] = {}

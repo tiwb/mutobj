@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import sys
 import warnings
+from types import FrameType
 from typing import Any, Callable, TypeVar
 
 from ._constants import (
@@ -145,6 +146,49 @@ def _register_to_chain(
     _store_metas(target_cls, impl_key, seq, metas)
     bump_registry_generation()
     return chain[-1][1] == source_module
+
+
+def _resolve_source_key(func: Callable[..., Any]) -> str:
+    source_key = getattr(func, "__mutobj_source_key__", None)
+    if isinstance(source_key, str) and source_key:
+        return source_key
+    return getattr(func, "__module__", "") or ""
+
+
+def _unwrap_descriptor(candidate: Any) -> Callable[..., Any] | None:
+    if isinstance(candidate, (classmethod, staticmethod)):
+        func = getattr(candidate, "__func__", None)  # pyright: ignore[reportUnknownArgumentType]
+        return func if callable(func) else None
+    return candidate if callable(candidate) else None
+
+
+def _resolve_frame_source_key(frame: FrameType) -> str | None:
+    locals_self = frame.f_locals.get("self")
+    if locals_self is not None:
+        method_name = frame.f_code.co_name
+        for klass in type(locals_self).__mro__:
+            candidate = _unwrap_descriptor(klass.__dict__.get(method_name))
+            if candidate is not None and getattr(candidate, "__code__", None) is frame.f_code:
+                return _resolve_source_key(candidate)
+
+    locals_cls = frame.f_locals.get("cls")
+    if isinstance(locals_cls, type):
+        method_name = frame.f_code.co_name
+        for klass in locals_cls.__mro__:
+            candidate = _unwrap_descriptor(klass.__dict__.get(method_name))
+            if candidate is not None and getattr(candidate, "__code__", None) is frame.f_code:
+                return _resolve_source_key(candidate)
+
+    globals_candidate = frame.f_globals.get(frame.f_code.co_name)
+    func = _unwrap_descriptor(globals_candidate)
+    if func is not None and getattr(func, "__code__", None) is frame.f_code:
+        return _resolve_source_key(func)
+
+    return None
+
+
+def _source_matches_module(source_key: str, module_name: str) -> bool:
+    return source_key == module_name or source_key.startswith(f"{module_name}::")
 
 
 def _store_metas(
@@ -316,7 +360,8 @@ def impl_call_super(
     **kwargs: Any,
 ) -> Any:
     cls, key = _resolve_impl_key(method)
-    caller_module = sys._getframe(_frame_depth).f_globals.get("__name__", "")  # pyright: ignore[reportPrivateUsage]
+    frame = sys._getframe(_frame_depth)  # pyright: ignore[reportPrivateUsage]
+    caller_module = _resolve_frame_source_key(frame) or frame.f_globals.get("__name__", "")
     chain = _impl_chain.get((cls, key), [])
     for index, (_fn, module_name, _seq) in enumerate(chain):
         if module_name == caller_module:
@@ -347,7 +392,8 @@ def impl(
     *metas: object,
 ) -> Callable[[Callable[..., Any]], Callable[..., Any]]:
     def decorator(func: Callable[..., Any]) -> Callable[..., Any]:
-        source_module = getattr(func, "__module__", "") or ""
+        source_module = _resolve_source_key(func)
+        func.__mutobj_source_key__ = source_module
 
         if isinstance(method, _PropertyGetterPlaceholder):
             target_cls, impl_key = _resolve_impl_key(method)
@@ -416,11 +462,17 @@ def unregister_module_impls(module_name: str) -> int:
     for key in list(_impl_chain):
         cls, impl_key = key
         chain = _impl_chain[key]
-        was_top_module = chain[-1][1] == module_name if chain else False
-        removed_seqs = [seq for _func, mod, seq in chain if mod == module_name]
+        was_top_module = _source_matches_module(chain[-1][1], module_name) if chain else False
+        removed_seqs = [
+            seq for _func, mod, seq in chain if _source_matches_module(mod, module_name)
+        ]
 
         before = len(chain)
-        chain[:] = [(func, mod, seq) for func, mod, seq in chain if mod != module_name]
+        chain[:] = [
+            (func, mod, seq)
+            for func, mod, seq in chain
+            if not _source_matches_module(mod, module_name)
+        ]
         removed += before - len(chain)
 
         for seq in removed_seqs:

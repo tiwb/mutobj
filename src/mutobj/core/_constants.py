@@ -5,6 +5,11 @@ _DECLARED_STATICMETHODS: str = "__mutobj_declared_staticmethods__"
 
 _MUTABLE_TYPES = (list, dict, set, bytearray)
 
+_DECLARATION_CHAIN_HOOKS = frozenset({
+    "__init__",
+    "__post_init__",
+})
+
 _MUTOBJ_RESERVED_DUNDERS = frozenset({
     "__new__",
     "__init_subclass__",

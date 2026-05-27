@@ -83,17 +83,13 @@ class TestResolveImplKeyNoGlobalsFallback:
         with pytest.raises(ValueError, match="Cannot determine class"):
             mutobj.impl_chain(f)
 
-    def test_declaration_base_class_still_resolvable_via_fallback(self):
-        """子类未桊、反推到 Declaration 基类是合法路径
-
-        此场景不应被误抦为非 Declaration。后续由 @impl 装饰器的
-        _DECLARATION_USER_HOOKS 检查抦截为 ValueError (refusing to register)。
-        """
+    def test_subclass_init_chain_is_resolved_without_falling_back_to_declaration(self):
+        """未手写 __init__ 的子类现在也有独立链入口。"""
         class Box(mutobj.Declaration):
             width: float = 0.0
-        # Box 未声明 __init__, Box.__init__ 实际是 Declaration.__init__
-        # 该路径必须能被解析为 Declaration, 才能触发 refusing-to-register 抦截
-        with pytest.raises(ValueError, match="refusing to register on Declaration"):
-            @mutobj.impl(Box.__init__)
-            def _box_init(self: Box, w: float) -> None:
-                self.width = w
+
+        @mutobj.impl(Box.__init__)
+        def _box_init(self: Box, w: float) -> None:
+            mutobj.impl_call_super(Box.__init__, self, w)
+
+        assert Box(2.5).width == 2.5

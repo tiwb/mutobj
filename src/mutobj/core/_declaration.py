@@ -4,7 +4,7 @@ from __future__ import annotations
 from typing import Any, Self, TypeVar
 
 from ._constants import (
-    _DECLARATION_USER_HOOKS,
+    _DECLARATION_CHAIN_HOOKS,
     _DECLARED_CLASSMETHODS,
     _DECLARED_METHODS,
     _DECLARED_PROPERTIES,
@@ -57,7 +57,7 @@ class DeclarationMeta(type):
 
         if name == "Declaration" and not bases:
             declared: set[str] = set()
-            for hook_name in _DECLARATION_USER_HOOKS:
+            for hook_name in _DECLARATION_CHAIN_HOOKS:
                 hook = namespace.get(hook_name)
                 if callable(hook):
                     hook.__mutobj_class__ = cls
@@ -318,6 +318,9 @@ class DeclarationMeta(type):
     def __call__(cls: type[T], *args: Any, **kwargs: Any) -> T:  # type: ignore[misc]
         obj = cls.__new__(cls, *args, **kwargs)
         if isinstance(obj, cls):
+            from ._implementation import _prepare_implementation_instance
+
+            _prepare_implementation_instance(obj)
             cls.__init__(obj, *args, **kwargs)
             obj.__post_init__()  # type: ignore[attr-defined]
         return obj
