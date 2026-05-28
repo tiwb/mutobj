@@ -42,6 +42,9 @@ htmlcov/
 *.swp
 *.swo
 
+# Package manager
+uv.lock
+
 # AI
 /CLAUDE.md
 /.claude
