@@ -259,6 +259,7 @@ class DeclarationMeta(type):
 
                     delegate.__name__ = mn
                     delegate.__qualname__ = f"{cls.__name__}.{mn}"
+                    delegate.__doc__ = getattr(b, mn).__doc__
                     delegate.__mutobj_class__ = cls
                     delegate.__mutobj_is_delegate__ = True
                     delegate.__mutobj_delegate_base__ = b
@@ -284,6 +285,7 @@ class DeclarationMeta(type):
 
                     delegate.__name__ = mn
                     delegate.__qualname__ = f"{cls.__name__}.{mn}"
+                    delegate.__doc__ = getattr(b.__dict__[mn].__func__, "__doc__", None) if mn in b.__dict__ and hasattr(b.__dict__[mn], "__func__") else None
                     delegate.__mutobj_class__ = cls
                     delegate.__mutobj_is_classmethod__ = True
                     delegate.__mutobj_is_delegate__ = True
@@ -306,6 +308,7 @@ class DeclarationMeta(type):
 
                     delegate.__name__ = mn
                     delegate.__qualname__ = f"{cls.__name__}.{mn}"
+                    delegate.__doc__ = getattr(b.__dict__[mn].__func__, "__doc__", None) if mn in b.__dict__ and hasattr(b.__dict__[mn], "__func__") else None
                     delegate.__mutobj_class__ = cls
                     delegate.__mutobj_is_staticmethod__ = True
                     delegate.__mutobj_is_delegate__ = True

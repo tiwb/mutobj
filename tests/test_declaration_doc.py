@@ -57,6 +57,18 @@ class TestGetDeclarationDoc:
 
         assert get_declaration_doc(Plain, "run") is None
 
+    def test_traverses_mro_for_inherited_method(self):
+        """子类未定义方法时，沿 MRO 取回父类声明的 docstring"""
+        class Base(mutobj.Declaration):
+            def action(self) -> str:
+                """Base action doc."""
+                ...
+
+        class Child(Base):
+            pass
+
+        assert get_declaration_doc(Child, "action") == "Base action doc."
+
 
 class TestGetDeclarationFunc:
     """get_declaration_func 基本功能测试"""
@@ -129,3 +141,18 @@ class TestGetDeclarationFunc:
             def run(self): ...
 
         assert get_declaration_func(Plain, "run") is None
+
+    def test_traverses_mro_for_inherited_method(self):
+        """子类未定义方法时，沿 MRO 取回父类声明的原始函数（含 __doc__）"""
+        class Base(mutobj.Declaration):
+            def action(self) -> str:
+                """Base action doc."""
+                ...
+
+        class Child(Base):
+            pass
+
+        func = get_declaration_func(Child, "action")
+        assert func is not None
+        assert func.__name__ == "action"
+        assert func.__doc__ == "Base action doc."
