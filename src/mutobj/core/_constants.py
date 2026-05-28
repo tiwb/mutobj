@@ -1,5 +1,4 @@
 _DECLARED_METHODS: str = "__mutobj_declared_methods__"
-_DECLARED_PROPERTIES: str = "__mutobj_declared_properties__"
 _DECLARED_CLASSMETHODS: str = "__mutobj_declared_classmethods__"
 _DECLARED_STATICMETHODS: str = "__mutobj_declared_staticmethods__"
 

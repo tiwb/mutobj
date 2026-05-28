@@ -233,6 +233,37 @@ class TestImplementationApiErrors:
 
         assert plain.value == 1
 
+    def test_impl_property_on_declared_field_raises(self) -> None:
+        class Product(mutobj.Declaration):
+            price: float
+
+        with pytest.raises(TypeError, match="is a field"):
+            class ProductImpl(mutobj.Implementation[Product]):
+                @property
+                def price(self) -> str:
+                    return "x"
+
+    def test_impl_method_on_declared_property_raises(self) -> None:
+        class Product(mutobj.Declaration):
+            @property
+            def label(self) -> str:
+                ...
+
+        with pytest.raises(TypeError, match="is a property"):
+            class ProductImpl(mutobj.Implementation[Product]):
+                def label(self) -> str:
+                    return "x"
+
+    def test_impl_property_on_declared_method_raises(self) -> None:
+        class Product(mutobj.Declaration):
+            def label(self) -> str: ...
+
+        with pytest.raises(TypeError, match="is a method"):
+            class ProductImpl(mutobj.Implementation[Product]):
+                @property
+                def label(self) -> str:
+                    return "x"
+
 
 class TestImplementationInheritance:
 

@@ -17,10 +17,11 @@ class TestPropertyDeclaration:
                 """显示名称"""
                 ...
 
-        # 验证 property 被识别为声明
-        from mutobj.core._constants import _DECLARED_PROPERTIES
-        declared = getattr(User, _DECLARED_PROPERTIES, set())
-        assert "display_name" in declared
+        desc = User.__dict__["display_name"]
+        assert isinstance(desc, mutobj.AttributeDescriptor)
+        assert desc.has_storage is False
+        assert desc.readonly is True
+        assert list(mutobj.fields(User).keys()) == ["name"]
 
     def test_default_property_getter_runs(self):
         """测试默认 property getter（方法体为 ...）直接执行"""

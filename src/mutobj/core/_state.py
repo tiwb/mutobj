@@ -24,7 +24,6 @@ _implementation_owner_registry: dict[
 
 _attribute_registry: dict[type, dict[str, Any]] = {}
 _classvar_registry: dict[type, set[str]] = {}
-_property_registry: dict[type, dict[str, Any]] = {}
 _class_registry: dict[tuple[str, str], type] = {}
 
 _registry_generation: int = 0

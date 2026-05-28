@@ -59,6 +59,22 @@ def field(
 class AttributeDescriptor:
     """Attribute descriptor used for declaration fields."""
 
+    __slots__ = (
+        "name",
+        "annotation",
+        "storage_name",
+        "default",
+        "default_factory",
+        "init",
+        "owner_cls",
+        "readonly",
+        "_has_storage",
+        "_fget",
+        "_fset",
+        "_default_fget",
+        "_default_fset",
+    )
+
     def __init__(
         self,
         name: str,
@@ -66,17 +82,46 @@ class AttributeDescriptor:
         default: Any = _MISSING,
         default_factory: Callable[[], Any] | None = None,
         init: bool = True,
-    ):
+        *,
+        owner_cls: type[Any] | None = None,
+        readonly: bool = False,
+        has_storage: bool = True,
+        fget: Callable[..., Any] | None = None,
+        fset: Callable[..., Any] | None = None,
+    ) -> None:
         self.name = name
         self.annotation = annotation
         self.storage_name = f"_mutobj_attr_{name}"
         self.default = default
         self.default_factory = default_factory
         self.init = init
+        self.owner_cls = owner_cls
+        self._has_storage = has_storage
+        self.readonly = readonly
+        if has_storage:
+            self._default_fget = self._storage_get
+            self._default_fset = None if readonly else self._storage_set
+        else:
+            self._default_fget = fget
+            self._default_fset = fset
+        self._fget = self._default_fget
+        self._fset = self._default_fset
 
     @property
     def has_default(self) -> bool:
         return self.default is not _MISSING or self.default_factory is not None
+
+    @property
+    def has_storage(self) -> bool:
+        return self._has_storage
+
+    @property
+    def getter(self) -> "_AttributeGetterPlaceholder":
+        return _AttributeGetterPlaceholder(self)
+
+    @property
+    def setter(self) -> "_AttributeSetterPlaceholder":
+        return _AttributeSetterPlaceholder(self)
 
     def get_default(self) -> Any:
         if self.default is not _MISSING:
@@ -92,9 +137,7 @@ class AttributeDescriptor:
             return self.default
         raise ValueError(f"Attribute '{self.name}' has no default")
 
-    def __get__(self, obj: Any, objtype: type | None = None) -> Any:
-        if obj is None:
-            return self
+    def _storage_get(self, obj: Any) -> Any:
         try:
             return getattr(obj, self.storage_name)
         except AttributeError as exc:
@@ -102,8 +145,34 @@ class AttributeDescriptor:
                 f"'{type(obj).__name__}' object has no attribute '{self.name}'"
             ) from exc
 
-    def __set__(self, obj: Any, value: Any) -> None:
+    def _storage_set(self, obj: Any, value: Any) -> None:
         setattr(obj, self.storage_name, value)
+
+    def restore_default_getter(self) -> None:
+        self._fget = self._default_fget
+
+    def restore_default_setter(self) -> None:
+        self._fset = self._default_fset
+
+    def __get__(self, obj: Any, objtype: type | None = None) -> Any:
+        if obj is None:
+            return self
+        if self._fget is None:
+            owner_name = self.owner_cls.__name__ if self.owner_cls is not None else "<unknown>"
+            raise NotImplementedError(
+                f"Property '{self.name}' getter is not implemented. "
+                f"Use @mutobj.impl({owner_name}.{self.name}.getter) to provide implementation."
+            )
+        return self._fget(obj)
+
+    def __set__(self, obj: Any, value: Any) -> None:
+        if self._fset is None:
+            owner_name = self.owner_cls.__name__ if self.owner_cls is not None else "<unknown>"
+            raise AttributeError(
+                f"Property '{self.name}' is read-only or setter is not implemented. "
+                f"Use @mutobj.impl({owner_name}.{self.name}.setter) to provide implementation."
+            )
+        self._fset(obj, value)
 
     def __delete__(self, obj: Any) -> None:
         try:
@@ -112,6 +181,16 @@ class AttributeDescriptor:
             raise AttributeError(
                 f"'{type(obj).__name__}' object has no attribute '{self.name}'"
             ) from exc
+
+
+class _AttributeGetterPlaceholder:
+    def __init__(self, descriptor: AttributeDescriptor):
+        self._descriptor = descriptor
+
+
+class _AttributeSetterPlaceholder:
+    def __init__(self, descriptor: AttributeDescriptor):
+        self._descriptor = descriptor
 
 
 _ordered_fields_cache: dict[type, list[str]] = {}

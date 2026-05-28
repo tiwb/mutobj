@@ -7,7 +7,6 @@ from ._constants import (
     _DECLARATION_CHAIN_HOOKS,
     _DECLARED_CLASSMETHODS,
     _DECLARED_METHODS,
-    _DECLARED_PROPERTIES,
     _DECLARED_STATICMETHODS,
     _MUTABLE_TYPES,
     _MUTOBJ_RESERVED_DUNDERS,
@@ -19,19 +18,23 @@ from ._fields import (
     _get_init_fields,
     _invalidate_ordered_fields_cache_for,
 )
-from ._properties import Property
 from ._reload import _migrate_registries, _update_class_inplace
 from ._state import (
     _attribute_registry,
     _class_registry,
     _classvar_registry,
     _impl_chain,
-    _property_registry,
     bump_registry_generation,
 )
 from ._typing_utils import _is_classvar
 
 T = TypeVar("T", bound="Declaration")
+
+
+def _property_return_annotation(prop: property) -> Any:
+    if prop.fget is None:
+        return Any
+    return getattr(prop.fget, "__annotations__", {}).get("return", Any)
 
 
 class DeclarationMeta(type):
@@ -49,7 +52,6 @@ class DeclarationMeta(type):
         existing = _class_registry.get(key)
 
         declared_methods: set[str] = set()
-        declared_properties: set[str] = set()
         declared_classmethods: set[str] = set()
         declared_staticmethods: set[str] = set()
 
@@ -100,6 +102,7 @@ class DeclarationMeta(type):
                     default=value.default,
                     default_factory=value.default_factory,
                     init=value.init,
+                    owner_cls=cls,
                 )
             elif attr_name in namespace and not isinstance(value, AttributeDescriptor):
                 if callable(value) or isinstance(value, property):
@@ -111,9 +114,14 @@ class DeclarationMeta(type):
                         f"value {type_name}. "
                         f"Use field(default_factory={type_name}) instead."
                     )
-                descriptor = AttributeDescriptor(attr_name, attr_type, default=value)
+                descriptor = AttributeDescriptor(
+                    attr_name,
+                    attr_type,
+                    default=value,
+                    owner_cls=cls,
+                )
             elif not hasattr(cls, attr_name) or not isinstance(getattr(cls, attr_name), AttributeDescriptor):
-                descriptor = AttributeDescriptor(attr_name, attr_type)
+                descriptor = AttributeDescriptor(attr_name, attr_type, owner_cls=cls)
             else:
                 attr_registry[attr_name] = attr_type
                 continue
@@ -157,6 +165,7 @@ class DeclarationMeta(type):
                     default=value.default,
                     default_factory=value.default_factory,
                     init=value.init,
+                    owner_cls=cls,
                 )
             elif isinstance(value, _MUTABLE_TYPES):
                 type_name = type(value).__name__  # pyright: ignore[reportUnknownArgumentType]
@@ -166,35 +175,43 @@ class DeclarationMeta(type):
                     f"Use field(default_factory={type_name}) instead."
                 )
             else:
-                descriptor = AttributeDescriptor(attr_name, parent_desc.annotation, default=value)
+                descriptor = AttributeDescriptor(
+                    attr_name,
+                    parent_desc.annotation,
+                    default=value,
+                    owner_cls=cls,
+                )
             setattr(cls, attr_name, descriptor)
             attr_registry[attr_name] = parent_desc.annotation
 
         _attribute_registry[cls] = attr_registry
         _classvar_registry[cls] = classvar_attrs
 
-        prop_registry: dict[str, Property] = {}
         for prop_name, prop_value in namespace.items():
             if prop_name in _MUTOBJ_RESERVED_DUNDERS:
                 continue
             if isinstance(prop_value, property):
-                declared_properties.add(prop_name)
-                mutobj_prop = Property(prop_name, cls)
-                setattr(cls, prop_name, mutobj_prop)
-                prop_registry[prop_name] = mutobj_prop
+                descriptor = AttributeDescriptor(
+                    prop_name,
+                    _property_return_annotation(prop_value),
+                    init=False,
+                    owner_cls=cls,
+                    readonly=prop_value.fset is None,
+                    has_storage=False,
+                    fget=prop_value.fget,
+                    fset=prop_value.fset,
+                )
+                setattr(cls, prop_name, descriptor)
                 if prop_value.fget is not None:
+                    prop_value.fget.__mutobj_class__ = cls
                     _impl_chain.setdefault((cls, f"{prop_name}.getter"), []).append(
                         (prop_value.fget, "__default__", 0)
                     )
-                    mutobj_prop._fget = prop_value.fget  # pyright: ignore[reportPrivateUsage]
                 if prop_value.fset is not None:
+                    prop_value.fset.__mutobj_class__ = cls
                     _impl_chain.setdefault((cls, f"{prop_name}.setter"), []).append(
                         (prop_value.fset, "__default__", 0)
                     )
-                    mutobj_prop._fset = prop_value.fset  # pyright: ignore[reportPrivateUsage]
-
-        _property_registry[cls] = prop_registry
-        setattr(cls, _DECLARED_PROPERTIES, declared_properties)
 
         for method_name, method_value in namespace.items():
             if method_name in _MUTOBJ_RESERVED_DUNDERS:
@@ -361,9 +378,19 @@ class DeclarationMeta(type):
                 default=value.default,
                 default_factory=value.default_factory,
                 init=value.init,
+                owner_cls=cls,
+                readonly=desc.readonly,
+                has_storage=desc.has_storage,
             )
         else:
-            new_desc = AttributeDescriptor(name, desc.annotation, default=value)
+            new_desc = AttributeDescriptor(
+                name,
+                desc.annotation,
+                default=value,
+                owner_cls=cls,
+                readonly=desc.readonly,
+                has_storage=desc.has_storage,
+            )
         super().__setattr__(name, new_desc)
 
         if from_base and cls in _attribute_registry and name not in _attribute_registry[cls]:  # pyright: ignore[reportUnnecessaryContains]

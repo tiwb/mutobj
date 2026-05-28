@@ -11,13 +11,16 @@ from ._constants import (
     _DECLARED_CLASSMETHODS,
     _DECLARED_STATICMETHODS,
 )
-from ._properties import _PropertyGetterPlaceholder, _PropertySetterPlaceholder
+from ._fields import (
+    AttributeDescriptor,
+    _AttributeGetterPlaceholder,
+    _AttributeSetterPlaceholder,
+)
 from ._state import (
     _class_registry,
     _impl_chain,
     _impl_metas,
     _module_first_seq,
-    _property_registry,
     bump_registry_generation,
     next_impl_seq,
 )
@@ -72,14 +75,14 @@ def _make_stub_staticmethod(name: str, cls: type) -> staticmethod[Any, Any]:
 def _apply_impl(cls: type, impl_key: str, func: Callable[..., Any]) -> None:
     if impl_key.endswith(".getter"):
         prop_name = impl_key[:-7]
-        prop = _property_registry.get(cls, {}).get(prop_name)
-        if prop is not None:
-            prop._fget = func  # pyright: ignore[reportPrivateUsage]
+        desc = cls.__dict__.get(prop_name)
+        if isinstance(desc, AttributeDescriptor):
+            desc._fget = func  # pyright: ignore[reportPrivateUsage]
     elif impl_key.endswith(".setter"):
         prop_name = impl_key[:-7]
-        prop = _property_registry.get(cls, {}).get(prop_name)
-        if prop is not None:
-            prop._fset = func  # pyright: ignore[reportPrivateUsage]
+        desc = cls.__dict__.get(prop_name)
+        if isinstance(desc, AttributeDescriptor):
+            desc._fset = func  # pyright: ignore[reportPrivateUsage]
     else:
         declared_cm: set[str] = getattr(cls, _DECLARED_CLASSMETHODS, set())
         declared_sm: set[str] = getattr(cls, _DECLARED_STATICMETHODS, set())
@@ -94,14 +97,14 @@ def _apply_impl(cls: type, impl_key: str, func: Callable[..., Any]) -> None:
 def _restore_stub(cls: type, impl_key: str) -> None:
     if impl_key.endswith(".getter"):
         prop_name = impl_key[:-7]
-        prop = _property_registry.get(cls, {}).get(prop_name)
-        if prop is not None:
-            prop._fget = None  # pyright: ignore[reportPrivateUsage]
+        desc = cls.__dict__.get(prop_name)
+        if isinstance(desc, AttributeDescriptor):
+            desc.restore_default_getter()
     elif impl_key.endswith(".setter"):
         prop_name = impl_key[:-7]
-        prop = _property_registry.get(cls, {}).get(prop_name)
-        if prop is not None:
-            prop._fset = None  # pyright: ignore[reportPrivateUsage]
+        desc = cls.__dict__.get(prop_name)
+        if isinstance(desc, AttributeDescriptor):
+            desc.restore_default_setter()
     else:
         declared_cm: set[str] = getattr(cls, _DECLARED_CLASSMETHODS, set())
         declared_sm: set[str] = getattr(cls, _DECLARED_STATICMETHODS, set())
@@ -162,6 +165,15 @@ def _unwrap_descriptor(candidate: Any) -> Callable[..., Any] | None:
     return candidate if callable(candidate) else None
 
 
+def _resolve_attribute_source_key(candidate: Any, frame: FrameType) -> str | None:
+    if not isinstance(candidate, AttributeDescriptor):
+        return None
+    for accessor in (candidate._fget, candidate._fset):  # pyright: ignore[reportPrivateUsage]
+        if accessor is not None and getattr(accessor, "__code__", None) is frame.f_code:
+            return _resolve_source_key(accessor)
+    return None
+
+
 def _resolve_property_source_key(candidate: Any, frame: FrameType) -> str | None:
     if not isinstance(candidate, property):
         return None
@@ -180,6 +192,9 @@ def _resolve_frame_source_key(frame: FrameType) -> str | None:
             property_source_key = _resolve_property_source_key(raw_candidate, frame)
             if property_source_key is not None:
                 return property_source_key
+            descriptor_source_key = _resolve_attribute_source_key(raw_candidate, frame)
+            if descriptor_source_key is not None:
+                return descriptor_source_key
             candidate = _unwrap_descriptor(raw_candidate)
             if candidate is not None and getattr(candidate, "__code__", None) is frame.f_code:
                 return _resolve_source_key(candidate)
@@ -192,6 +207,9 @@ def _resolve_frame_source_key(frame: FrameType) -> str | None:
             property_source_key = _resolve_property_source_key(raw_candidate, frame)
             if property_source_key is not None:
                 return property_source_key
+            descriptor_source_key = _resolve_attribute_source_key(raw_candidate, frame)
+            if descriptor_source_key is not None:
+                return descriptor_source_key
             candidate = _unwrap_descriptor(raw_candidate)
             if candidate is not None and getattr(candidate, "__code__", None) is frame.f_code:
                 return _resolve_source_key(candidate)
@@ -219,16 +237,20 @@ def _store_metas(
 
 
 def _resolve_impl_key(method: Any) -> tuple[type, str]:
-    if isinstance(method, _PropertyGetterPlaceholder):
-        prop = method._prop  # pyright: ignore[reportPrivateUsage]
-        return prop.owner_cls, f"{prop.name}.getter"
+    if isinstance(method, _AttributeGetterPlaceholder):
+        desc = method._descriptor  # pyright: ignore[reportPrivateUsage]
+        if desc.owner_cls is None:
+            raise ValueError(f"Cannot determine class for descriptor {desc.name}")
+        return desc.owner_cls, f"{desc.name}.getter"
 
-    if isinstance(method, _PropertySetterPlaceholder):
-        prop = method._prop  # pyright: ignore[reportPrivateUsage]
-        return prop.owner_cls, f"{prop.name}.setter"
+    if isinstance(method, _AttributeSetterPlaceholder):
+        desc = method._descriptor  # pyright: ignore[reportPrivateUsage]
+        if desc.owner_cls is None:
+            raise ValueError(f"Cannot determine class for descriptor {desc.name}")
+        return desc.owner_cls, f"{desc.name}.setter"
 
     if not callable(method):
-        raise TypeError(f"Expected a callable or property accessor, got {type(method)}")
+        raise TypeError(f"Expected a callable or descriptor accessor, got {type(method)}")
 
     method_name = getattr(method, "__name__", "")
     target_cls = getattr(method, "__mutobj_class__", None)
@@ -405,27 +427,27 @@ def call_super_impl(method: Any, *args: Any, **kwargs: Any) -> Any:
 
 
 def impl(
-    method: Callable[..., Any] | _PropertyGetterPlaceholder | _PropertySetterPlaceholder,
+    method: Callable[..., Any] | _AttributeGetterPlaceholder | _AttributeSetterPlaceholder,
     *metas: object,
 ) -> Callable[[Callable[..., Any]], Callable[..., Any]]:
     def decorator(func: Callable[..., Any]) -> Callable[..., Any]:
         source_module = _resolve_source_key(func)
         func.__mutobj_source_key__ = source_module
 
-        if isinstance(method, _PropertyGetterPlaceholder):
+        if isinstance(method, _AttributeGetterPlaceholder):
             target_cls, impl_key = _resolve_impl_key(method)
-            prop = method._prop  # pyright: ignore[reportPrivateUsage]
+            desc = method._descriptor  # pyright: ignore[reportPrivateUsage]
             became_top = _register_to_chain(target_cls, impl_key, func, source_module, metas)
             if became_top:
-                prop._fget = func  # pyright: ignore[reportPrivateUsage]
+                desc._fget = func  # pyright: ignore[reportPrivateUsage]
             return func
 
-        if isinstance(method, _PropertySetterPlaceholder):
+        if isinstance(method, _AttributeSetterPlaceholder):
             target_cls, impl_key = _resolve_impl_key(method)
-            prop = method._prop  # pyright: ignore[reportPrivateUsage]
+            desc = method._descriptor  # pyright: ignore[reportPrivateUsage]
             became_top = _register_to_chain(target_cls, impl_key, func, source_module, metas)
             if became_top:
-                prop._fset = func  # pyright: ignore[reportPrivateUsage]
+                desc._fset = func  # pyright: ignore[reportPrivateUsage]
             return func
 
         target_cls, method_name = _resolve_impl_key(method)

@@ -8,9 +8,9 @@ from typing import Any, Generic, TypeVar, cast
 from ._constants import (
     _DECLARATION_CHAIN_HOOKS,
     _DECLARED_METHODS,
-    _DECLARED_PROPERTIES,
 )
 from ._declaration import Declaration
+from ._fields import _get_attribute_descriptor
 from ._impls import _apply_impl, _register_to_chain
 from ._state import (
     _implementation_class_registry,
@@ -151,12 +151,24 @@ def _register_implementation_methods(
 ) -> None:
     source_key = _implementation_source_key(impl_cls)
     declared_methods: set[str] = getattr(target_cls, _DECLARED_METHODS, set())
-    declared_properties: set[str] = getattr(target_cls, _DECLARED_PROPERTIES, set())
     bridged_methods = declared_methods | _DECLARATION_CHAIN_HOOKS
 
     for method_name, method_value in impl_cls.__dict__.items():
+        target_desc = _get_attribute_descriptor(target_cls, method_name)
         if isinstance(method_value, property):
-            if method_name not in declared_properties:
+            if target_desc is None:
+                if method_name in bridged_methods and hasattr(target_cls, method_name):
+                    raise TypeError(
+                        f"Implementation '{impl_cls.__name__}.{method_name}' uses @property, "
+                        f"but Declaration '{target_cls.__name__}.{method_name}' is a method."
+                    )
+                continue
+            if target_desc.has_storage:
+                raise TypeError(
+                    f"Implementation '{impl_cls.__name__}.{method_name}' uses @property, "
+                    f"but Declaration '{target_cls.__name__}.{method_name}' is a field."
+                )
+            if method_value.fget is None and method_value.fset is None:
                 continue
             if method_value.fget is not None:
                 _register_implementation_property_accessor(
@@ -186,6 +198,12 @@ def _register_implementation_methods(
             and method_name not in _DECLARATION_CHAIN_HOOKS
         ):
             continue
+        if target_desc is not None:
+            member_kind = "field" if target_desc.has_storage else "property"
+            raise TypeError(
+                f"Implementation '{impl_cls.__name__}.{method_name}' defines a method, "
+                f"but Declaration '{target_cls.__name__}.{method_name}' is a {member_kind}."
+            )
         if method_name not in bridged_methods:
             continue
         if not hasattr(target_cls, method_name):

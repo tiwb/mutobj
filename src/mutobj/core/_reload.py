@@ -5,14 +5,12 @@ from typing import Any, Callable
 
 from ._fields import AttributeDescriptor, _invalidate_ordered_fields_cache_for
 from ._impls import _apply_impl
-from ._properties import Property
 from ._state import (
     _attribute_registry,
     _class_registry,
     _classvar_registry,
     _impl_chain,
     _module_first_seq,
-    _property_registry,
 )
 
 
@@ -55,7 +53,7 @@ def _update_class_inplace(existing: type, new_cls: type) -> None:
             inner: Callable[..., Any] = val.__func__  # pyright: ignore[reportUnknownMemberType, reportUnknownVariableType]
             if hasattr(inner, "__mutobj_class__"):
                 inner.__mutobj_class__ = existing
-        if isinstance(val, Property):
+        if isinstance(val, AttributeDescriptor):
             val.owner_cls = existing
 
     if "__annotations__" in new_cls.__dict__:
@@ -101,12 +99,6 @@ def _migrate_registries(existing: type, new_cls: type) -> None:
         _classvar_registry[existing] = _classvar_registry.pop(new_cls)
 
     _invalidate_ordered_fields_cache_for(existing)
-
-    if new_cls in _property_registry:
-        props = _property_registry.pop(new_cls)
-        for prop in props.values():
-            prop.owner_cls = existing
-        _property_registry[existing] = props
 
     key = (new_cls.__module__, new_cls.__qualname__)
     if _class_registry.get(key) is new_cls:
