@@ -162,12 +162,25 @@ def _unwrap_descriptor(candidate: Any) -> Callable[..., Any] | None:
     return candidate if callable(candidate) else None
 
 
+def _resolve_property_source_key(candidate: Any, frame: FrameType) -> str | None:
+    if not isinstance(candidate, property):
+        return None
+    for accessor in (candidate.fget, candidate.fset, candidate.fdel):
+        if accessor is not None and getattr(accessor, "__code__", None) is frame.f_code:
+            return _resolve_source_key(accessor)
+    return None
+
+
 def _resolve_frame_source_key(frame: FrameType) -> str | None:
     locals_self = frame.f_locals.get("self")
     if locals_self is not None:
         method_name = frame.f_code.co_name
         for klass in type(locals_self).__mro__:
-            candidate = _unwrap_descriptor(klass.__dict__.get(method_name))
+            raw_candidate = klass.__dict__.get(method_name)
+            property_source_key = _resolve_property_source_key(raw_candidate, frame)
+            if property_source_key is not None:
+                return property_source_key
+            candidate = _unwrap_descriptor(raw_candidate)
             if candidate is not None and getattr(candidate, "__code__", None) is frame.f_code:
                 return _resolve_source_key(candidate)
 
@@ -175,7 +188,11 @@ def _resolve_frame_source_key(frame: FrameType) -> str | None:
     if isinstance(locals_cls, type):
         method_name = frame.f_code.co_name
         for klass in locals_cls.__mro__:
-            candidate = _unwrap_descriptor(klass.__dict__.get(method_name))
+            raw_candidate = klass.__dict__.get(method_name)
+            property_source_key = _resolve_property_source_key(raw_candidate, frame)
+            if property_source_key is not None:
+                return property_source_key
+            candidate = _unwrap_descriptor(raw_candidate)
             if candidate is not None and getattr(candidate, "__code__", None) is frame.f_code:
                 return _resolve_source_key(candidate)
 

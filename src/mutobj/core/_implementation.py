@@ -5,7 +5,11 @@ from __future__ import annotations
 import weakref
 from typing import Any, Generic, TypeVar, cast
 
-from ._constants import _DECLARATION_CHAIN_HOOKS, _DECLARED_METHODS
+from ._constants import (
+    _DECLARATION_CHAIN_HOOKS,
+    _DECLARED_METHODS,
+    _DECLARED_PROPERTIES,
+)
 from ._declaration import Declaration
 from ._impls import _apply_impl, _register_to_chain
 from ._state import (
@@ -16,6 +20,7 @@ from ._state import (
 )
 
 T = TypeVar("T", bound=Declaration)
+IT = TypeVar("IT", bound="Implementation[Any]")
 
 
 def _implementation_source_key(impl_cls: type) -> str:
@@ -55,6 +60,40 @@ def _bind_implementation_instance(decl: Declaration, impl: object) -> None:
     )
 
 
+def _lookup_implementation_class(
+    decl_cls: type[Declaration],
+) -> type["Implementation[Any]"] | None:
+    for klass in decl_cls.__mro__:
+        impl_cls = _implementation_class_registry.get(klass)
+        if impl_cls is not None:
+            return cast(type[Implementation[Any]], impl_cls)
+    return None
+
+
+def _lookup_implementation_instance(decl: Declaration, impl_cls: type[IT]) -> IT | None:
+    impl = _implementation_instance_registry.get(decl)
+    if impl is None or not isinstance(impl, impl_cls):
+        return None
+    return impl
+
+
+def _lookup_implementation_owner(impl: object) -> Declaration | None:
+    entry = _implementation_owner_registry.get(id(impl))
+    if entry is None:
+        return None
+    decl_ref, _finalizer = entry
+    decl = decl_ref()
+    if decl is None:
+        _implementation_owner_registry.pop(id(impl), None)
+    return decl
+
+
+def _describe_value(value: object) -> str:
+    if isinstance(value, type):
+        return value.__name__
+    return f"{type(value).__name__} instance"
+
+
 def _implementation_bridge(
     target_cls: type[Declaration],
     impl_cls: type,
@@ -63,11 +102,16 @@ def _implementation_bridge(
     source_key: str,
 ) -> Any:
     def bridge(decl: Declaration, *args: Any, **kwargs: Any) -> Any:
-        impl = implementation_of(decl, impl_cls)
+        impl = _implementation_instance_registry.get(decl)
         if impl is None:
             raise RuntimeError(
                 f"Implementation instance for {target_cls.__name__} -> "
                 f"{impl_cls.__name__} is not available"
+            )
+        if not isinstance(impl, impl_cls):
+            raise RuntimeError(
+                f"Implementation instance for {target_cls.__name__} is "
+                f"{type(impl).__name__}, expected {impl_cls.__name__}"
             )
         return impl_method(impl, *args, **kwargs)
 
@@ -79,15 +123,60 @@ def _implementation_bridge(
     return bridge
 
 
+def _register_implementation_property_accessor(
+    target_cls: type[Declaration],
+    impl_cls: type,
+    prop_name: str,
+    accessor_kind: str,
+    accessor_func: Any,
+    source_key: str,
+) -> None:
+    accessor_func.__mutobj_source_key__ = source_key
+    impl_key = f"{prop_name}.{accessor_kind}"
+    bridge = _implementation_bridge(
+        target_cls,
+        impl_cls,
+        impl_key,
+        accessor_func,
+        source_key,
+    )
+    became_top = _register_to_chain(target_cls, impl_key, bridge, source_key)
+    if became_top:
+        _apply_impl(target_cls, impl_key, bridge)
+
+
 def _register_implementation_methods(
     impl_cls: type,
     target_cls: type[Declaration],
 ) -> None:
     source_key = _implementation_source_key(impl_cls)
     declared_methods: set[str] = getattr(target_cls, _DECLARED_METHODS, set())
+    declared_properties: set[str] = getattr(target_cls, _DECLARED_PROPERTIES, set())
     bridged_methods = declared_methods | _DECLARATION_CHAIN_HOOKS
 
     for method_name, method_value in impl_cls.__dict__.items():
+        if isinstance(method_value, property):
+            if method_name not in declared_properties:
+                continue
+            if method_value.fget is not None:
+                _register_implementation_property_accessor(
+                    target_cls,
+                    impl_cls,
+                    method_name,
+                    "getter",
+                    method_value.fget,
+                    source_key,
+                )
+            if method_value.fset is not None:
+                _register_implementation_property_accessor(
+                    target_cls,
+                    impl_cls,
+                    method_name,
+                    "setter",
+                    method_value.fset,
+                    source_key,
+                )
+            continue
         if not callable(method_value):
             continue
         method_value.__mutobj_source_key__ = source_key
@@ -150,17 +239,17 @@ def _prepare_implementation_instance(decl: Declaration) -> Any | None:
     if decl in _implementation_instance_registry:
         return _implementation_instance_registry[decl]
 
-    impl_cls = implementation_class(type(decl))
+    impl_cls = _lookup_implementation_class(type(decl))
     if impl_cls is None:
         return None
 
-    impl = cast(Any, impl_cls).__new__(impl_cls)
+    impl = cast(object, cast(Any, impl_cls).__new__(impl_cls))
     if not isinstance(impl, impl_cls):
         raise TypeError(
             f"{impl_cls.__name__}.__new__ returned {type(impl).__name__}, "
             f"expected {impl_cls.__name__}"
         )
-    _bind_implementation_instance(decl, impl)
+    _bind_implementation_instance(decl, cast(object, impl))
     return impl
 
 
@@ -176,38 +265,57 @@ class Implementation(Generic[T]):
 
 
 def implementation_class(
-    decl_or_cls: Declaration | type[Declaration],
-) -> type | None:
-    decl_cls: type[Declaration]
-    if isinstance(decl_or_cls, Declaration):
-        decl_cls = type(decl_or_cls)
-    elif isinstance(decl_or_cls, type) and issubclass(decl_or_cls, Declaration):
-        decl_cls = decl_or_cls
-    else:
-        raise TypeError("implementation_class() expects a Declaration instance or class")
+    decl_cls: type[T],
+) -> type[Implementation[T]]:
+    if not isinstance(decl_cls, type) or not issubclass(decl_cls, Declaration):
+        raise TypeError(
+            "implementation_class() expects a mutobj.Declaration class, "
+            f"got {_describe_value(decl_cls)}"
+        )
 
-    for klass in decl_cls.__mro__:
-        impl_cls = _implementation_class_registry.get(klass)
-        if impl_cls is not None:
-            return impl_cls
-    return None
-
-
-def implementation_of(decl: Declaration, impl_cls: type | None = None) -> Any | None:
-    impl = _implementation_instance_registry.get(decl)
-    if impl is None:
-        return None
-    if impl_cls is not None and not isinstance(impl, impl_cls):
-        return None
-    return impl
+    impl_cls = _lookup_implementation_class(decl_cls)
+    if impl_cls is None:
+        raise LookupError(
+            f"No Implementation class is registered for {decl_cls.__name__}"
+        )
+    return cast(type[Implementation[T]], impl_cls)
 
 
-def implementation_owner(impl: object) -> Declaration | None:
-    entry = _implementation_owner_registry.get(id(impl))
-    if entry is None:
-        return None
-    decl_ref, _finalizer = entry
-    decl = decl_ref()
-    if decl is None:
-        _implementation_owner_registry.pop(id(impl), None)
-    return decl
+def implementation_of(decl: T, impl_cls: type[IT]) -> IT:
+    if not isinstance(decl, Declaration):
+        raise TypeError(
+            "implementation_of() expects decl to be a mutobj.Declaration instance"
+        )
+    if not isinstance(impl_cls, type) or not issubclass(impl_cls, Implementation):
+        raise TypeError(
+            "implementation_of() expects impl_cls to be an Implementation subclass"
+        )
+
+    impl = _lookup_implementation_instance(decl, impl_cls)
+    if impl is not None:
+        return impl
+
+    actual_impl = _implementation_instance_registry.get(decl)
+    if actual_impl is None:
+        raise LookupError(
+            f"No {impl_cls.__name__} instance is associated with "
+            f"{type(decl).__name__} instance"
+        )
+    raise LookupError(
+        f"Implementation instance for {type(decl).__name__} is "
+        f"{type(actual_impl).__name__}, expected {impl_cls.__name__}"
+    )
+
+
+def implementation_owner(impl: Implementation[T]) -> T:
+    if not isinstance(impl, Implementation):
+        raise TypeError(
+            "implementation_owner() expects impl to be an Implementation instance"
+        )
+
+    owner = _lookup_implementation_owner(impl)
+    if owner is None:
+        raise LookupError(
+            f"No Declaration owner is associated with {type(impl).__name__} instance"
+        )
+    return cast(T, owner)
