@@ -26,7 +26,7 @@ _attribute_registry: dict[type, dict[str, Any]] = {}
 _classvar_registry: dict[type, set[str]] = {}
 _class_registry: dict[tuple[str, str], type] = {}
 
-_registry_generation: int = 0
+_registry_generation: int = 1
 
 
 def next_impl_seq() -> int:

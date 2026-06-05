@@ -2,12 +2,15 @@
 from __future__ import annotations
 
 import importlib
-from typing import Any, Callable
+from typing import Any, Callable, TypeVar
 
+from ._declaration import Declaration
 from ._state import _class_registry, _impl_chain, get_registry_generation as _get_registry_generation
 
+T = TypeVar("T")
 
-def discover_subclasses(base_cls: type) -> list[type]:
+
+def discover_subclasses(base_cls: type[T]) -> list[type[T]]:
     return [
         cls
         for cls in _class_registry.values()
@@ -15,10 +18,10 @@ def discover_subclasses(base_cls: type) -> list[type]:
     ]
 
 
-def resolve_class(class_path: str, base_cls: type | None = None) -> type:
+def resolve_class(class_path: str, base_cls: type[T] = Declaration) -> type[T]:
     for (module_name, qualname), cls in _class_registry.items():
         if class_path in (qualname, cls.__name__, f"{module_name}.{qualname}"):
-            if base_cls is not None and not issubclass(cls, base_cls):
+            if not issubclass(cls, base_cls):
                 raise ValueError(
                     f"Class {class_path} is not a subclass of {base_cls.__name__}"
                 )
@@ -34,7 +37,7 @@ def resolve_class(class_path: str, base_cls: type | None = None) -> type:
         key = (module_path, class_name)
         if key in _class_registry:
             cls = _class_registry[key]
-            if base_cls is not None and not issubclass(cls, base_cls):
+            if not issubclass(cls, base_cls):
                 raise ValueError(
                     f"Class {class_path} is not a subclass of {base_cls.__name__}"
                 )
