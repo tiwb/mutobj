@@ -336,7 +336,7 @@ class TestOverrideChainProperty:
         setter_a.__module__ = "prop_chain2_mod_a"
         mutobj.impl(PropSvc2.value.setter)(setter_a)
 
-        obj = PropSvc2()
+        obj = PropSvc2(_val="")
         obj.value = "test"
         assert obj.value == "A:test"
 

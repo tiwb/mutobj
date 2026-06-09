@@ -15,6 +15,7 @@ from ._fields import (
     AttributeDescriptor,
     Field,
     _get_attribute_descriptor,
+    fields as _get_fields,
     _get_init_fields,
     _invalidate_ordered_fields_cache_for,
 )
@@ -35,6 +36,26 @@ def _property_return_annotation(prop: property) -> Any:
     if prop.fget is None:
         return Any
     return getattr(prop.fget, "__annotations__", {}).get("return", Any)
+
+
+def _format_field_names(field_names: list[str]) -> str:
+    return ", ".join(f"'{name}'" for name in field_names)
+
+
+def _validate_declaration_field(owner_name: str, descriptor: AttributeDescriptor) -> None:
+    if descriptor.has_storage and not descriptor.init and not descriptor.has_default:
+        raise TypeError(
+            f"Declaration '{owner_name}' field '{descriptor.name}' is init=False but has no "
+            f"default; provide default/default_factory or set init=True."
+        )
+
+
+def _get_missing_construction_fields(obj: Declaration) -> list[str]:
+    missing: list[str] = []
+    for attr_name, desc in _get_fields(type(obj)).items():
+        if desc.has_storage and desc.storage_name not in obj.__dict__:
+            missing.append(attr_name)
+    return missing
 
 
 class DeclarationMeta(type):
@@ -126,6 +147,7 @@ class DeclarationMeta(type):
                 attr_registry[attr_name] = attr_type
                 continue
 
+            _validate_declaration_field(name, descriptor)
             setattr(cls, attr_name, descriptor)
             attr_registry[attr_name] = attr_type
 
@@ -181,6 +203,7 @@ class DeclarationMeta(type):
                     default=value,
                     owner_cls=cls,
                 )
+            _validate_declaration_field(name, descriptor)
             setattr(cls, attr_name, descriptor)
             attr_registry[attr_name] = parent_desc.annotation
 
@@ -343,10 +366,18 @@ class DeclarationMeta(type):
             _prepare_implementation_instance(obj)
             cls.__init__(obj, *args, **kwargs)
             obj.__post_init__()  # type: ignore[attr-defined]
+            missing_fields = _get_missing_construction_fields(obj)
+            if missing_fields:
+                raise TypeError(
+                    f"{type(obj).__name__} missing field(s) after construction: "
+                    f"{_format_field_names(missing_fields)}. Either pass them to __init__ "
+                    f"or assign in __post_init__."
+                )
         return obj
 
     def __setattr__(cls, name: str, value: Any) -> None:
         if isinstance(value, AttributeDescriptor):
+            _validate_declaration_field(cls.__name__, value)
             super().__setattr__(name, value)
             return
 
@@ -394,6 +425,7 @@ class DeclarationMeta(type):
                 readonly=desc.readonly,
                 has_storage=desc.has_storage,
             )
+        _validate_declaration_field(cls.__name__, new_desc)
         super().__setattr__(name, new_desc)
 
         if from_base and cls in _attribute_registry and name not in _attribute_registry[cls]:  # pyright: ignore[reportUnnecessaryContains]

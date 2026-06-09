@@ -75,16 +75,17 @@ class TestImmutableDefaults:
         assert u.age == 0
         assert u.active is True
 
-    def test_no_default_still_raises(self):
-        """无默认值的属性未传入时仍报 AttributeError"""
+    def test_no_default_is_required_at_construction(self):
+        """无默认值字段在构造时立即报错。"""
         class Item(mutobj.Declaration):
             name: str
             count: int = 1
 
-        item = Item()
-        assert item.count == 1
-        with pytest.raises(AttributeError):
-            _ = item.name
+        with pytest.raises(
+            TypeError,
+            match=r"Item missing field\(s\) after construction: 'name'",
+        ):
+            Item()
 
 
 class TestFieldFunction:

@@ -78,8 +78,7 @@ class TestPropertyImplementation:
                 raise ValueError("Value must be non-negative")
             self._value = val
 
-        c = Counter()
-        c._value = 0
+        c = Counter(_value=0)
 
         c.value = 10
         assert c.value == 10
@@ -101,8 +100,7 @@ class TestPropertyImplementation:
         def data_getter(self: ReadOnly) -> str:
             return self._data
 
-        obj = ReadOnly()
-        obj._data = "test"
+        obj = ReadOnly(_data="test")
         assert obj.data == "test"
 
         with pytest.raises(AttributeError) as exc_info:

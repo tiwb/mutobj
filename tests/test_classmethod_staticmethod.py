@@ -47,9 +47,7 @@ class TestClassmethodImplementation:
 
         @mutobj.impl(Counter.from_value)
         def from_value(cls, val: int) -> Counter:
-            instance = cls()
-            instance.value = val
-            return instance
+            return cls(value=val)
 
         c = Counter.from_value(42)
         assert c.value == 42
@@ -66,9 +64,7 @@ class TestClassmethodImplementation:
 
         @mutobj.impl(Base.create_with_name)
         def create_with_name(cls, name: str) -> Base:
-            instance = cls()
-            instance.name = name
-            return instance
+            return cls(name=name)
 
         b = Base.create_with_name("test")
         assert b.name == "test"
@@ -179,9 +175,7 @@ class TestMixedMethods:
 
         @mutobj.impl(Service.create)
         def create(cls) -> Service:
-            s = cls()
-            s.name = "default"
-            return s
+            return cls(name="default")
 
         @mutobj.impl(Service.validate)
         def validate(data: str) -> bool:

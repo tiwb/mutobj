@@ -32,13 +32,15 @@ class TestDeclarationDeclaration:
         assert p.name == "Bob"
 
     def test_attribute_not_set(self):
-        """测试访问未设置的属性"""
+        """测试无默认值字段在构造时就被要求提供。"""
         class Item(mutobj.Declaration):
             value: int
 
-        item = Item()
-        with pytest.raises(AttributeError):
-            _ = item.value
+        with pytest.raises(
+            TypeError,
+            match=r"Item missing field\(s\) after construction: 'value'",
+        ):
+            Item()
 
     def test_method_declaration_recognized(self):
         """测试方法声明被识别"""
@@ -87,13 +89,13 @@ class TestDeclarationInit:
         assert p.price == 9.99
 
     def test_partial_kwargs(self):
-        """测试部分关键字参数初始化"""
+        """测试部分关键字参数初始化现在会拒绝缺失必填字段。"""
         class Config(mutobj.Declaration):
             host: str
             port: int
 
-        c = Config(host="localhost")
-        assert c.host == "localhost"
-
-        with pytest.raises(AttributeError):
-            _ = c.port
+        with pytest.raises(
+            TypeError,
+            match=r"Config missing field\(s\) after construction: 'port'",
+        ):
+            Config(host="localhost")

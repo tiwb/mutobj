@@ -159,9 +159,7 @@ class TestClassmethodStaticmethodInheritance:
 
         @mutobj.impl(Factory.create)
         def create(cls, v: int) -> Factory:
-            obj = cls()
-            obj.value = v
-            return obj
+            return cls(value=v)
 
         class ChildFactory(Factory):
             pass
