@@ -446,16 +446,18 @@ class TestUnannotatedOverride:
         child_desc = Child.__dict__.get("process")
         assert not isinstance(child_desc, AttributeDescriptor)
 
-    def test_private_attr_not_triggered(self):
-        """私有属性不触发覆盖逻辑"""
+    def test_private_attr_override(self):
+        """_ 前缀标了注解也会被当做正常字段处理"""
         class Base(mutobj.Declaration):
             _internal: str = "base"
 
         class Child(Base):
             _internal = "child"
 
-        # _internal 不在 _attribute_registry 中（下划线开头跳过）
-        assert Child._internal == "child"
+        # _internal 有父 descriptor，子类覆盖应生成新 descriptor
+        desc = Child.__dict__.get("_internal")
+        assert isinstance(desc, AttributeDescriptor)
+        assert desc.default == "child"
 
     # -- 注册表与交互验证 --
 
@@ -510,6 +512,7 @@ class TestInitDefaultValues:
 
         class ChildView(View):
             id = "child"
+            value: int = 0
 
             def __init__(self):
                 self.value = 0
@@ -525,6 +528,8 @@ class TestInitDefaultValues:
             y: str = "hello"
 
         class Child(Base):
+            z: int = 0
+
             def __init__(self):
                 self.z = 99
 

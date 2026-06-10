@@ -34,11 +34,15 @@ class TestClassLevelAssignment:
         _SetAttrSub.count = 0
 
     def test_existing_instance_unaffected(self):
+        # lazy default 语义：实例未显式设置该字段时，首次 read 才从 descriptor 取 default。
+        # 这意味着构造后修改类 default，未读过的实例会看到新值。
         obj = _SetAttrBase()
-        assert obj.name == "original"
+        assert obj.name == "original"   # 首次 read 后缓存（不可变 default 不写 storage，但以后仍返回 descriptor.default）
         _SetAttrBase.name = "changed"
-        assert obj.name == "original"
+        # 不可变 default 不缓存到 storage，后续读取走 descriptor.default 拿到新值
+        assert obj.name == "changed"
         _SetAttrBase.name = "original"
+        assert obj.name == "original"
 
     def test_field_assignment(self):
         _SetAttrBase.name = field(default="from_field")

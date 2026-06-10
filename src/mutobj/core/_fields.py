@@ -62,7 +62,6 @@ class AttributeDescriptor:
     __slots__ = (
         "name",
         "annotation",
-        "storage_name",
         "default",
         "default_factory",
         "init",
@@ -91,7 +90,6 @@ class AttributeDescriptor:
     ) -> None:
         self.name = name
         self.annotation = annotation
-        self.storage_name = f"_mutobj_attr_{name}"
         self.default = default
         self.default_factory = default_factory
         self.init = init
@@ -138,15 +136,27 @@ class AttributeDescriptor:
         raise ValueError(f"Attribute '{self.name}' has no default")
 
     def _storage_get(self, obj: Any) -> Any:
+        # 字段值统一存放在 obj._mutobj_storage（dict），lazy 求值默认值：
+        # - 已显式赋值：直接命中
+        # - default_factory：首次访问求值并缓存（保证多次访问拿到同一对象）
+        # - default（不可变）：每次返回 self.default，不写入 storage（节省内存）
+        # - 无默认值：抛 AttributeError
+        storage: dict[str, Any] = obj._mutobj_storage
         try:
-            return getattr(obj, self.storage_name)
-        except AttributeError as exc:
+            return storage[self.name]
+        except KeyError:
+            if self.default_factory is not None:
+                value = self.default_factory()
+                storage[self.name] = value
+                return value
+            if self.default is not _MISSING:
+                return self.default
             raise AttributeError(
                 f"'{type(obj).__name__}' object has no attribute '{self.name}'"
-            ) from exc
+            ) from None
 
     def _storage_set(self, obj: Any, value: Any) -> None:
-        setattr(obj, self.storage_name, value)
+        obj._mutobj_storage[self.name] = value
 
     def restore_default_getter(self) -> None:
         self._fget = self._default_fget
@@ -176,8 +186,8 @@ class AttributeDescriptor:
 
     def __delete__(self, obj: Any) -> None:
         try:
-            delattr(obj, self.storage_name)
-        except AttributeError as exc:
+            del obj._mutobj_storage[self.name]
+        except KeyError as exc:
             raise AttributeError(
                 f"'{type(obj).__name__}' object has no attribute '{self.name}'"
             ) from exc

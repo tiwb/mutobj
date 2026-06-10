@@ -52,8 +52,11 @@ def _validate_declaration_field(owner_name: str, descriptor: AttributeDescriptor
 
 def _get_missing_construction_fields(obj: Declaration) -> list[str]:
     missing: list[str] = []
+    storage: dict[str, Any] = obj._mutobj_storage  # pyright: ignore[reportPrivateUsage]
     for attr_name, desc in _get_fields(type(obj)).items():
-        if desc.has_storage and desc.storage_name not in obj.__dict__:
+        # has_default 的字段不需要出现在 storage（lazy default 不写入）；
+        # 只有必填字段（无默认值且 has_storage）才需检查是否被赋值。
+        if desc.has_storage and not desc.has_default and desc.name not in storage:
             missing.append(attr_name)
     return missing
 
@@ -75,6 +78,11 @@ class DeclarationMeta(type):
         declared_methods: set[str] = set()
         declared_classmethods: set[str] = set()
         declared_staticmethods: set[str] = set()
+
+        # 强制所有 Declaration 子类拥有空 __slots__，禁止 Python 默认为子类加 __dict__。
+        # 注意必须在 super().__new__ 之前写入 namespace。
+        if name != "Declaration" and "__slots__" not in namespace:
+            namespace["__slots__"] = ()
 
         cls = super().__new__(mcs, name, bases, namespace)
 
@@ -151,7 +159,7 @@ class DeclarationMeta(type):
             setattr(cls, attr_name, descriptor)
             attr_registry[attr_name] = attr_type
 
-        own_annotations = namespace.get("__annotations__", {})
+        own_annotations = getattr(cls, "__annotations__", {})
         for attr_name, value in namespace.items():
             if attr_name in own_annotations:
                 continue
@@ -163,8 +171,6 @@ class DeclarationMeta(type):
                         f"and does not support field(default_factory=...). "
                         f"Use a plain default value or a module-level constant instead."
                     )
-                continue
-            if attr_name.startswith("_"):
                 continue
             if callable(value) or isinstance(value, (property, classmethod, staticmethod)):
                 continue
@@ -436,21 +442,15 @@ class DeclarationMeta(type):
 class Declaration(metaclass=DeclarationMeta):
     """Base class for mutobj declarations."""
 
+    # __weakref__：_implementation_instance_registry 是 WeakKeyDictionary，需要实例可弱引用。
+    # _mutobj_storage：存放所有字段值的内部 dict，替代原来的实例 __dict__。
+    # 使用单下划线而非双下划线：避免 Python name mangling 在跨类访问（AttributeDescriptor / 模块级函数）中失效。
+    __slots__ = ("__weakref__", "_mutobj_storage")
+
     def __new__(cls, *args: Any, **kwargs: Any) -> Self:
         obj = super().__new__(cls)
-        applied: set[str] = set()
-        for klass in cls.__mro__:
-            if klass in _attribute_registry:
-                for attr_name in _attribute_registry[klass]:
-                    if attr_name in applied:
-                        continue
-                    desc = klass.__dict__.get(attr_name)
-                    if isinstance(desc, AttributeDescriptor) and desc.has_default:
-                        if desc.default_factory is not None:
-                            setattr(obj, attr_name, desc.default_factory())
-                        else:
-                            setattr(obj, attr_name, desc.default)
-                        applied.add(attr_name)
+        # 字段值存储区；默认值不再热切预填，由 AttributeDescriptor._storage_get 首次访问时 lazy 求值。
+        obj._mutobj_storage = {}
         return obj
 
     def __init__(self, *args: Any, **kwargs: Any) -> None:

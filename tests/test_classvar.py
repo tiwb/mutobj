@@ -44,8 +44,8 @@ class TestClassVarBasic:
 
         f = Foo()
         assert f._app is None
-        # 实例未创建 _mutobj_attr__app
-        assert not hasattr(f, "_mutobj_attr__app")
+        # ClassVar 不是字段，实例 storage dict 里不应出现 _app
+        assert "_app" not in f._mutobj_storage
 
     def test_classvar_not_in_attribute_registry(self):
         class Foo(mutobj.Declaration):
