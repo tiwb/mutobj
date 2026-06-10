@@ -1,15 +1,15 @@
-_DECLARED_METHODS: str = "__mutobj_declared_methods__"
-_DECLARED_CLASSMETHODS: str = "__mutobj_declared_classmethods__"
-_DECLARED_STATICMETHODS: str = "__mutobj_declared_staticmethods__"
+DECLARED_METHODS: str = "__mutobj_declared_methods__"
+DECLARED_CLASSMETHODS: str = "__mutobj_declared_classmethods__"
+DECLARED_STATICMETHODS: str = "__mutobj_declared_staticmethods__"
 
-_MUTABLE_TYPES = (list, dict, set, bytearray)
+MUTABLE_TYPES = (list, dict, set, bytearray)
 
-_DECLARATION_CHAIN_HOOKS = frozenset({
+DECLARATION_CHAIN_HOOKS = frozenset({
     "__init__",
     "__post_init__",
 })
 
-_MUTOBJ_RESERVED_DUNDERS = frozenset({
+MUTOBJ_RESERVED_DUNDERS = frozenset({
     "__new__",
     "__init_subclass__",
     "__class_getitem__",
@@ -19,6 +19,6 @@ _MUTOBJ_RESERVED_DUNDERS = frozenset({
     "__subclasscheck__",
 })
 
-_DECLARATION_USER_HOOKS = frozenset({
+DECLARATION_USER_HOOKS = frozenset({
     "__post_init__",
 })

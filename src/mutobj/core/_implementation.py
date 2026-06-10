@@ -1,25 +1,23 @@
 from __future__ import annotations
 
-# pyright: reportPrivateUsage=false, reportUnknownVariableType=false, reportUnknownMemberType=false, reportInvalidTypeVarUse=false, reportCallIssue=false, reportUnusedFunction=false, reportUnnecessaryIsInstance=false
-
 import weakref
 from typing import Any, Generic, TypeVar, cast
 
 from ._constants import (
-    _DECLARATION_CHAIN_HOOKS,
-    _DECLARED_METHODS,
+    DECLARATION_CHAIN_HOOKS,
+    DECLARED_METHODS,
 )
 from ._declaration import Declaration
-from ._fields import _get_attribute_descriptor, _process_field_annotations
-from ._impls import _apply_impl, _register_to_chain
+from ._fields import get_attribute_descriptor, process_field_annotations
+from ._impls import apply_impl, register_to_chain
 from ._state import (
-    _attribute_registry,
-    _implementation_class_registry,
-    _implementation_instance_registry,
-    _implementation_owner_registry,
+    attribute_registry,
+    implementation_class_registry,
+    implementation_instance_registry,
+    implementation_owner_registry,
     bump_registry_generation,
 )
-from ._typing_utils import _is_classvar
+from ._typing_utils import is_classvar
 
 T = TypeVar("T", bound=Declaration)
 IT = TypeVar("IT", bound="Implementation[Any]")
@@ -30,7 +28,7 @@ def _implementation_source_key(impl_cls: type) -> str:
 
 
 def _cleanup_implementation_owner(impl_id: int) -> None:
-    _implementation_owner_registry.pop(impl_id, None)
+    implementation_owner_registry.pop(impl_id, None)
 
 
 def _resolve_target_class(impl_cls: type) -> type[Declaration] | None:
@@ -56,12 +54,12 @@ def _resolve_target_class(impl_cls: type) -> type[Declaration] | None:
 
 
 def _bind_implementation_instance(decl: Declaration, impl: object) -> None:
-    previous_impl = _implementation_instance_registry.get(decl)
+    previous_impl = implementation_instance_registry.get(decl)
     if previous_impl is not None:
-        _implementation_owner_registry.pop(id(previous_impl), None)
+        implementation_owner_registry.pop(id(previous_impl), None)
 
-    _implementation_instance_registry[decl] = impl
-    _implementation_owner_registry[id(impl)] = (
+    implementation_instance_registry[decl] = impl
+    implementation_owner_registry[id(impl)] = (
         weakref.ref(decl),
         weakref.finalize(decl, _cleanup_implementation_owner, id(impl)),
     )
@@ -71,27 +69,27 @@ def _lookup_implementation_class(
     decl_cls: type[Declaration],
 ) -> type["Implementation[Any]"] | None:
     for klass in decl_cls.__mro__:
-        impl_cls = _implementation_class_registry.get(klass)
+        impl_cls = implementation_class_registry.get(klass)
         if impl_cls is not None:
             return cast(type[Implementation[Any]], impl_cls)
     return None
 
 
 def _lookup_implementation_instance(decl: Declaration, impl_cls: type[IT]) -> IT | None:
-    impl = _implementation_instance_registry.get(decl)
+    impl = implementation_instance_registry.get(decl)
     if impl is None or not isinstance(impl, impl_cls):
         return None
     return impl
 
 
 def _lookup_implementation_owner(impl: object) -> Declaration | None:
-    entry = _implementation_owner_registry.get(id(impl))
+    entry = implementation_owner_registry.get(id(impl))
     if entry is None:
         return None
     decl_ref, _finalizer = entry
     decl = decl_ref()
     if decl is None:
-        _implementation_owner_registry.pop(id(impl), None)
+        implementation_owner_registry.pop(id(impl), None)
     return decl
 
 
@@ -109,7 +107,7 @@ def _implementation_bridge(
     source_key: str,
 ) -> Any:
     def bridge(decl: Declaration, *args: Any, **kwargs: Any) -> Any:
-        impl = _implementation_instance_registry.get(decl)
+        impl = implementation_instance_registry.get(decl)
         if impl is None:
             raise RuntimeError(
                 f"Implementation instance for {target_cls.__name__} -> "
@@ -147,9 +145,9 @@ def _register_implementation_property_accessor(
         accessor_func,
         source_key,
     )
-    became_top = _register_to_chain(target_cls, impl_key, bridge, source_key)
+    became_top = register_to_chain(target_cls, impl_key, bridge, source_key)
     if became_top:
-        _apply_impl(target_cls, impl_key, bridge)
+        apply_impl(target_cls, impl_key, bridge)
 
 
 def _register_implementation_methods(
@@ -157,11 +155,11 @@ def _register_implementation_methods(
     target_cls: type[Declaration],
 ) -> None:
     source_key = _implementation_source_key(impl_cls)
-    declared_methods: set[str] = getattr(target_cls, _DECLARED_METHODS, set())
-    bridged_methods = declared_methods | _DECLARATION_CHAIN_HOOKS
+    declared_methods: set[str] = getattr(target_cls, DECLARED_METHODS, set())
+    bridged_methods = declared_methods | DECLARATION_CHAIN_HOOKS
 
     for method_name, method_value in impl_cls.__dict__.items():
-        target_desc = _get_attribute_descriptor(target_cls, method_name)
+        target_desc = get_attribute_descriptor(target_cls, method_name)
         if isinstance(method_value, property):
             if target_desc is None:
                 if method_name in bridged_methods and hasattr(target_cls, method_name):
@@ -202,7 +200,7 @@ def _register_implementation_methods(
         if (
             method_name.startswith("__")
             and method_name.endswith("__")
-            and method_name not in _DECLARATION_CHAIN_HOOKS
+            and method_name not in DECLARATION_CHAIN_HOOKS
         ):
             continue
         if target_desc is not None:
@@ -223,16 +221,16 @@ def _register_implementation_methods(
             method_value,
             source_key,
         )
-        became_top = _register_to_chain(target_cls, method_name, bridge, source_key)
+        became_top = register_to_chain(target_cls, method_name, bridge, source_key)
         if became_top:
-            _apply_impl(target_cls, method_name, bridge)
+            apply_impl(target_cls, method_name, bridge)
 
 
 def _register_implementation_class(
     impl_cls: type,
     target_cls: type[Declaration],
 ) -> None:
-    existing_impl = _implementation_class_registry.get(target_cls)
+    existing_impl = implementation_class_registry.get(target_cls)
     if existing_impl is not None and existing_impl is not impl_cls:
         if (
             existing_impl.__module__ != impl_cls.__module__
@@ -245,7 +243,7 @@ def _register_implementation_class(
 
     parent_impl: type | None = None
     for base in target_cls.__mro__[1:]:
-        parent_impl = _implementation_class_registry.get(base)
+        parent_impl = implementation_class_registry.get(base)
         if parent_impl is not None:
             break
     if parent_impl is not None and not issubclass(impl_cls, parent_impl):
@@ -255,14 +253,14 @@ def _register_implementation_class(
         )
 
     impl_cls._target_class = target_cls
-    _implementation_class_registry[target_cls] = impl_cls
+    implementation_class_registry[target_cls] = impl_cls
     _register_implementation_methods(impl_cls, target_cls)
     bump_registry_generation()
 
 
-def _prepare_implementation_instance(decl: Declaration) -> Any | None:
-    if decl in _implementation_instance_registry:
-        return _implementation_instance_registry[decl]
+def prepare_implementation_instance(decl: Declaration) -> Any | None:
+    if decl in implementation_instance_registry:
+        return implementation_instance_registry[decl]
 
     impl_cls = _lookup_implementation_class(type(decl))
     if impl_cls is None:
@@ -276,7 +274,7 @@ def _prepare_implementation_instance(decl: Declaration) -> Any | None:
         )
     # 始终初始化 _mutobj_storage：基类 __slots__ 保证了它的存在。
     # 声明字段赋值时 AttributeDescriptor 写入此处；未声明（有 __dict__ 时）走 __dict__。
-    impl._mutobj_storage = {}  # pyright: ignore[reportAttributeAccessIssue]
+    impl._mutobj_storage = {}  # pyright: ignore[reportAttributeAccessIssue, reportPrivateUsage]
     _bind_implementation_instance(decl, cast(object, impl))
     return impl
 
@@ -286,7 +284,7 @@ class ImplementationMeta(type):
 
     职责：
     1. 默认注入 ``__slots__ = ()``，避免子类默认获得 ``__dict__``。
-    2. 扫描 annotations 创建 AttributeDescriptor（调共享 ``_process_field_annotations``）。
+    2. 扫描 annotations 创建 AttributeDescriptor（调共享 ``process_field_annotations``）。
     3. 解析 ``Implementation[T]`` 的 T 并调 ``_register_implementation_class``。
 
     子类可显式 ``__slots__ = ("__dict__",)`` 附加 ``__dict__``：annotations 仍处理为
@@ -324,10 +322,10 @@ class ImplementationMeta(type):
             base_anns = getattr(base, "__annotations__", {})
             base_module = getattr(base, "__module__", "")
             for base_attr, base_type in base_anns.items():
-                if _is_classvar(base_type, base_module):
+                if is_classvar(base_type, base_module):
                     parent_classvars.add(base_attr)
 
-        descriptors, _classvar_attrs, inherited_redeclared = _process_field_annotations(
+        descriptors, _classvar_attrs, inherited_redeclared = process_field_annotations(
             annotations, namespace, module, cls, parent_classvars,
         )
         attr_registry: dict[str, Any] = {}
@@ -337,7 +335,7 @@ class ImplementationMeta(type):
         for attr_name, attr_type in inherited_redeclared:
             attr_registry[attr_name] = attr_type
         if attr_registry:
-            _attribute_registry[cls] = attr_registry
+            attribute_registry[cls] = attr_registry
             bump_registry_generation()
 
         # target_class 解析与注册（原 __init_subclass__ 逻辑平移）。
@@ -353,7 +351,7 @@ class Implementation(Generic[T], metaclass=ImplementationMeta):
     # 子类可 __slots__ = ("__dict__",) 附加 __dict__：声明字段 → descriptor，未声明 → __dict__。
     # _target_class 是类属性（_register_implementation_class 中赋值），
     # 不能列入 __slots__——否则与同名类级默认值冲突，import 期 ValueError。
-    # __weakref__ 不需要：_implementation_owner_registry 用 id(impl) 做 key、
+    # __weakref__ 不需要：implementation_owner_registry 用 id(impl) 做 key、
     # weakref.finalize 绑在 decl 上，impl 实例不需要支持弱引用。
     __slots__ = ("_mutobj_storage",)
     _target_class: type[T] | None = None
@@ -390,7 +388,7 @@ def implementation_of(decl: T, impl_cls: type[IT]) -> IT:
     if impl is not None:
         return impl
 
-    actual_impl = _implementation_instance_registry.get(decl)
+    actual_impl = implementation_instance_registry.get(decl)
     if actual_impl is None:
         raise LookupError(
             f"No {impl_cls.__name__} instance is associated with "

@@ -1,7 +1,7 @@
 """Tests for discover_subclasses and get_registry_generation."""
 
 import mutobj
-from mutobj.core._state import _class_registry, _impl_chain
+from mutobj.core._state import class_registry, impl_chain_registry
 
 
 class TestDiscoverSubclasses:
@@ -55,7 +55,7 @@ class TestDiscoverSubclasses:
         assert Child in result
 
     def test_discover_after_unregister(self):
-        """模块卸载后，通过从 _class_registry 移除类来验证不再被发现"""
+        """模块卸载后，通过从 class_registry 移除类来验证不再被发现"""
         class Base2(mutobj.Declaration):
             def run(self) -> str: ...
 
@@ -66,12 +66,12 @@ class TestDiscoverSubclasses:
 
         # 模拟模块卸载：从 registry 中移除 Sub2
         key_to_remove = None
-        for key, cls in _class_registry.items():
+        for key, cls in class_registry.items():
             if cls is Sub2:
                 key_to_remove = key
                 break
         assert key_to_remove is not None
-        del _class_registry[key_to_remove]
+        del class_registry[key_to_remove]
 
         assert Sub2 not in mutobj.discover_subclasses(Base2)
 

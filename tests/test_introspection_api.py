@@ -188,7 +188,7 @@ class TestImplIsOwnAndInherited:
 
 class TestImplChain:
 
-    def test_impl_chain_returns_copy(self) -> None:
+    def testimpl_chain_returns_copy(self) -> None:
         class Svc(mutobj.Declaration):
             def run(self) -> int:
                 return 1

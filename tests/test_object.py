@@ -2,8 +2,8 @@
 
 import pytest
 import mutobj
-from mutobj.core._constants import _DECLARED_METHODS
-from mutobj.core._state import _attribute_registry
+from mutobj.core._constants import DECLARED_METHODS
+from mutobj.core._state import attribute_registry
 
 
 class TestDeclarationDeclaration:
@@ -16,9 +16,9 @@ class TestDeclarationDeclaration:
             age: int
 
         # 验证属性已注册
-        assert User in _attribute_registry
-        assert "name" in _attribute_registry[User]
-        assert "age" in _attribute_registry[User]
+        assert User in attribute_registry
+        assert "name" in attribute_registry[User]
+        assert "age" in attribute_registry[User]
 
     def test_attribute_access(self):
         """测试属性访问"""
@@ -50,7 +50,7 @@ class TestDeclarationDeclaration:
                 ...
 
         # 验证方法被识别为声明
-        declared = getattr(Calculator, _DECLARED_METHODS, set())
+        declared = getattr(Calculator, DECLARED_METHODS, set())
         assert "add" in declared
 
     def test_stub_method_with_pass(self):
@@ -59,7 +59,7 @@ class TestDeclarationDeclaration:
             def process(self) -> None:
                 pass
 
-        declared = getattr(Service, _DECLARED_METHODS, set())
+        declared = getattr(Service, DECLARED_METHODS, set())
         assert "process" in declared
 
     def test_default_impl_runs_without_error(self):

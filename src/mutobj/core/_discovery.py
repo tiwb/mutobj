@@ -1,11 +1,10 @@
-# pyright: reportPrivateUsage=false
 from __future__ import annotations
 
 import importlib
 from typing import Any, Callable, TypeVar
 
 from ._declaration import Declaration
-from ._state import _class_registry, _impl_chain, get_registry_generation as _get_registry_generation
+from ._state import class_registry, impl_chain_registry, get_registry_generation as _get_registry_generation
 
 T = TypeVar("T")
 
@@ -13,13 +12,13 @@ T = TypeVar("T")
 def discover_subclasses(base_cls: type[T]) -> list[type[T]]:
     return [
         cls
-        for cls in _class_registry.values()
+        for cls in class_registry.values()
         if cls is not base_cls and isinstance(cls, type) and issubclass(cls, base_cls)  # pyright: ignore[reportUnnecessaryIsInstance]
     ]
 
 
 def resolve_class(class_path: str, base_cls: type[T] = Declaration) -> type[T]:
-    for (module_name, qualname), cls in _class_registry.items():
+    for (module_name, qualname), cls in class_registry.items():
         if class_path in (qualname, cls.__name__, f"{module_name}.{qualname}"):
             if not issubclass(cls, base_cls):
                 raise ValueError(
@@ -35,8 +34,8 @@ def resolve_class(class_path: str, base_cls: type[T] = Declaration) -> type[T]:
             raise ValueError(f"Cannot import module for {class_path}: {exc}") from exc
 
         key = (module_path, class_name)
-        if key in _class_registry:
-            cls = _class_registry[key]
+        if key in class_registry:
+            cls = class_registry[key]
             if not issubclass(cls, base_cls):
                 raise ValueError(
                     f"Class {class_path} is not a subclass of {base_cls.__name__}"
@@ -48,7 +47,7 @@ def resolve_class(class_path: str, base_cls: type[T] = Declaration) -> type[T]:
 
 def get_declaration_func(cls: type, method_name: str) -> Callable[..., Any] | None:
     for klass in cls.__mro__:
-        chain = _impl_chain.get((klass, method_name))
+        chain = impl_chain_registry.get((klass, method_name))
         if not chain:
             continue
         for func, source_module, _seq in chain:

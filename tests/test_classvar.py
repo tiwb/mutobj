@@ -8,7 +8,7 @@ from typing import ClassVar
 
 import mutobj
 from mutobj.core._fields import AttributeDescriptor
-from mutobj.core._state import _attribute_registry
+from mutobj.core._state import attribute_registry
 
 
 def _exec_module(source: str, module_name: str, *, keep: bool = False) -> dict:
@@ -47,12 +47,12 @@ class TestClassVarBasic:
         # ClassVar 不是字段，实例 storage dict 里不应出现 _app
         assert "_app" not in f._mutobj_storage
 
-    def test_classvar_not_in_attribute_registry(self):
+    def test_classvar_not_inattribute_registry(self):
         class Foo(mutobj.Declaration):
             _app: ClassVar[int] = 0
             name: str = "foo"
 
-        reg = _attribute_registry[Foo]
+        reg = attribute_registry[Foo]
         assert "app" not in reg
         assert "name" in reg
 
@@ -284,7 +284,7 @@ class TestClassVarInheritance:
             Child = child_ns["Child"]
             assert Child.app == "child"
             assert not isinstance(Child.app, AttributeDescriptor)
-            assert "app" not in _attribute_registry[Child]
+            assert "app" not in attribute_registry[Child]
         finally:
             sys.modules.pop("test_classvar_parent_mod", None)
 
@@ -350,7 +350,7 @@ class TestClassVarReload:
         assert cls2 is cls
         assert cls.x == 2
         assert not isinstance(cls.__dict__["x"], AttributeDescriptor)
-        assert "x" not in _attribute_registry[cls]
+        assert "x" not in attribute_registry[cls]
         assert cls().x == 2
 
     def test_redefinition_classvar_to_field_creates_descriptor(self):
@@ -372,7 +372,7 @@ class TestClassVarReload:
         cls2 = g2["ReloadField"]
         assert cls2 is cls
         assert isinstance(cls.x, AttributeDescriptor)
-        assert "x" in _attribute_registry[cls]
+        assert "x" in attribute_registry[cls]
         assert cls().x == 2
 
     def test_redefinition_classvar_default_updates_plain_value(self):

@@ -1,4 +1,3 @@
-# pyright: reportPrivateUsage=false
 from __future__ import annotations
 
 import sys
@@ -7,20 +6,20 @@ from types import FrameType
 from typing import Any, Callable, TypeVar
 
 from ._constants import (
-    _DECLARATION_USER_HOOKS,
-    _DECLARED_CLASSMETHODS,
-    _DECLARED_STATICMETHODS,
+    DECLARATION_USER_HOOKS,
+    DECLARED_CLASSMETHODS,
+    DECLARED_STATICMETHODS,
 )
 from ._fields import (
     AttributeDescriptor,
-    _AttributeGetterPlaceholder,
-    _AttributeSetterPlaceholder,
+    AttributeGetterPlaceholder,
+    AttributeSetterPlaceholder,
 )
 from ._state import (
-    _class_registry,
-    _impl_chain,
-    _impl_metas,
-    _module_first_seq,
+    class_registry,
+    impl_chain_registry,
+    impl_metas,
+    module_first_seq,
     bump_registry_generation,
     next_impl_seq,
 )
@@ -72,7 +71,7 @@ def _make_stub_staticmethod(name: str, cls: type) -> staticmethod[Any, Any]:
     return staticmethod(stub)
 
 
-def _apply_impl(cls: type, impl_key: str, func: Callable[..., Any]) -> None:
+def apply_impl(cls: type, impl_key: str, func: Callable[..., Any]) -> None:
     if impl_key.endswith(".getter"):
         prop_name = impl_key[:-7]
         desc = cls.__dict__.get(prop_name)
@@ -84,8 +83,8 @@ def _apply_impl(cls: type, impl_key: str, func: Callable[..., Any]) -> None:
         if isinstance(desc, AttributeDescriptor):
             desc._fset = func  # pyright: ignore[reportPrivateUsage]
     else:
-        declared_cm: set[str] = getattr(cls, _DECLARED_CLASSMETHODS, set())
-        declared_sm: set[str] = getattr(cls, _DECLARED_STATICMETHODS, set())
+        declared_cm: set[str] = getattr(cls, DECLARED_CLASSMETHODS, set())
+        declared_sm: set[str] = getattr(cls, DECLARED_STATICMETHODS, set())
         if impl_key in declared_cm:
             setattr(cls, impl_key, classmethod(func))
         elif impl_key in declared_sm:
@@ -106,8 +105,8 @@ def _restore_stub(cls: type, impl_key: str) -> None:
         if isinstance(desc, AttributeDescriptor):
             desc.restore_default_setter()
     else:
-        declared_cm: set[str] = getattr(cls, _DECLARED_CLASSMETHODS, set())
-        declared_sm: set[str] = getattr(cls, _DECLARED_STATICMETHODS, set())
+        declared_cm: set[str] = getattr(cls, DECLARED_CLASSMETHODS, set())
+        declared_sm: set[str] = getattr(cls, DECLARED_STATICMETHODS, set())
         if impl_key in declared_cm:
             setattr(cls, impl_key, _make_stub_classmethod(impl_key, cls))
         elif impl_key in declared_sm:
@@ -116,7 +115,7 @@ def _restore_stub(cls: type, impl_key: str) -> None:
             setattr(cls, impl_key, _make_stub_method(impl_key, cls))
 
 
-def _register_to_chain(
+def register_to_chain(
     target_cls: type,
     impl_key: str,
     func: Callable[..., Any],
@@ -124,7 +123,7 @@ def _register_to_chain(
     metas: tuple[object, ...] = (),
 ) -> bool:
     key = (target_cls, impl_key)
-    chain = _impl_chain.setdefault(key, [])
+    chain = impl_chain_registry.setdefault(key, [])
     seq_key = (target_cls, impl_key, source_module)
 
     existing_idx = next(
@@ -138,11 +137,11 @@ def _register_to_chain(
         bump_registry_generation()
         return existing_idx == len(chain) - 1
 
-    if seq_key in _module_first_seq:
-        seq = _module_first_seq[seq_key]
+    if seq_key in module_first_seq:
+        seq = module_first_seq[seq_key]
     else:
         seq = next_impl_seq()
-        _module_first_seq[seq_key] = seq
+        module_first_seq[seq_key] = seq
 
     chain.append((func, source_module, seq))
     chain.sort(key=lambda item: item[2])
@@ -231,20 +230,20 @@ def _store_metas(
 ) -> None:
     meta_key = (target_cls, impl_key, seq)
     if metas:
-        _impl_metas[meta_key] = metas
+        impl_metas[meta_key] = metas
     else:
-        _impl_metas.pop(meta_key, None)
+        impl_metas.pop(meta_key, None)
 
 
 def _resolve_impl_key(method: Any) -> tuple[type, str]:
-    if isinstance(method, _AttributeGetterPlaceholder):
-        desc = method._descriptor  # pyright: ignore[reportPrivateUsage]
+    if isinstance(method, AttributeGetterPlaceholder):
+        desc = method.descriptor
         if desc.owner_cls is None:
             raise ValueError(f"Cannot determine class for descriptor {desc.name}")
         return desc.owner_cls, f"{desc.name}.getter"
 
-    if isinstance(method, _AttributeSetterPlaceholder):
-        desc = method._descriptor  # pyright: ignore[reportPrivateUsage]
+    if isinstance(method, AttributeSetterPlaceholder):
+        desc = method.descriptor
         if desc.owner_cls is None:
             raise ValueError(f"Cannot determine class for descriptor {desc.name}")
         return desc.owner_cls, f"{desc.name}.setter"
@@ -263,7 +262,7 @@ def _resolve_impl_key(method: Any) -> tuple[type, str]:
             raise ValueError(f"Cannot determine class for method {method}")
 
         candidates = [
-            cls for cls in _class_registry.values() if cls.__name__ == class_name
+            cls for cls in class_registry.values() if cls.__name__ == class_name
         ]
         if len(candidates) > 1:
             paths = [f"{cls.__module__}.{cls.__qualname__}" for cls in candidates]
@@ -327,13 +326,13 @@ def impl_has(method: Any) -> bool:
 
 def impl_has_override(method: Any) -> bool:
     cls, key = _resolve_impl_key(method)
-    chain = _impl_chain.get((cls, key), [])
+    chain = impl_chain_registry.get((cls, key), [])
     return any(source_module != "__default__" for _func, source_module, _seq in chain)
 
 
 def impl_is_own(method: Any) -> bool:
     cls, key = _resolve_impl_key(method)
-    chain = _impl_chain.get((cls, key), [])
+    chain = impl_chain_registry.get((cls, key), [])
     if not chain:
         return False
     return not getattr(chain[0][0], "__mutobj_is_delegate__", False)
@@ -341,7 +340,7 @@ def impl_is_own(method: Any) -> bool:
 
 def impl_is_inherited(method: Any) -> bool:
     cls, key = _resolve_impl_key(method)
-    chain = _impl_chain.get((cls, key), [])
+    chain = impl_chain_registry.get((cls, key), [])
     if not chain:
         return False
     return bool(getattr(chain[0][0], "__mutobj_is_delegate__", False))
@@ -349,7 +348,7 @@ def impl_is_inherited(method: Any) -> bool:
 
 def impl_chain(method: Any) -> list[tuple[Callable[..., Any], str, int]]:
     cls, key = _resolve_impl_key(method)
-    return list(_impl_chain.get((cls, key), []))
+    return list(impl_chain_registry.get((cls, key), []))
 
 
 def _resolve_chain_top_meta_key(
@@ -362,7 +361,7 @@ def _resolve_chain_top_meta_key(
         return None
     _visited.add(pair)
 
-    chain = _impl_chain.get(pair)
+    chain = impl_chain_registry.get(pair)
     if not chain:
         return None
 
@@ -382,7 +381,7 @@ def impl_meta(method: Any) -> tuple[object, ...]:
     resolved = _resolve_chain_top_meta_key(cls, key)
     if resolved is None:
         return ()
-    return _impl_metas.get(resolved, ())
+    return impl_metas.get(resolved, ())
 
 
 def impl_meta_of(method: Any, meta_type: type[_F]) -> _F | None:
@@ -401,7 +400,7 @@ def impl_call_super(
     cls, key = _resolve_impl_key(method)
     frame = sys._getframe(_frame_depth)  # pyright: ignore[reportPrivateUsage]
     caller_module = _resolve_frame_source_key(frame) or frame.f_globals.get("__name__", "")
-    chain = _impl_chain.get((cls, key), [])
+    chain = impl_chain_registry.get((cls, key), [])
     for index, (_fn, module_name, _seq) in enumerate(chain):
         if module_name == caller_module:
             if index == 0:
@@ -427,25 +426,25 @@ def call_super_impl(method: Any, *args: Any, **kwargs: Any) -> Any:
 
 
 def impl(
-    method: Callable[..., Any] | _AttributeGetterPlaceholder | _AttributeSetterPlaceholder,
+    method: Callable[..., Any] | AttributeGetterPlaceholder | AttributeSetterPlaceholder,
     *metas: object,
 ) -> Callable[[Callable[..., Any]], Callable[..., Any]]:
     def decorator(func: Callable[..., Any]) -> Callable[..., Any]:
         source_module = _resolve_source_key(func)
         func.__mutobj_source_key__ = source_module
 
-        if isinstance(method, _AttributeGetterPlaceholder):
+        if isinstance(method, AttributeGetterPlaceholder):
             target_cls, impl_key = _resolve_impl_key(method)
-            desc = method._descriptor  # pyright: ignore[reportPrivateUsage]
-            became_top = _register_to_chain(target_cls, impl_key, func, source_module, metas)
+            desc = method.descriptor
+            became_top = register_to_chain(target_cls, impl_key, func, source_module, metas)
             if became_top:
                 desc._fget = func  # pyright: ignore[reportPrivateUsage]
             return func
 
-        if isinstance(method, _AttributeSetterPlaceholder):
+        if isinstance(method, AttributeSetterPlaceholder):
             target_cls, impl_key = _resolve_impl_key(method)
-            desc = method._descriptor  # pyright: ignore[reportPrivateUsage]
-            became_top = _register_to_chain(target_cls, impl_key, func, source_module, metas)
+            desc = method.descriptor
+            became_top = register_to_chain(target_cls, impl_key, func, source_module, metas)
             if became_top:
                 desc._fset = func  # pyright: ignore[reportPrivateUsage]
             return func
@@ -454,7 +453,7 @@ def impl(
 
         from ._declaration import Declaration
 
-        if target_cls is Declaration and method_name not in _DECLARATION_USER_HOOKS:
+        if target_cls is Declaration and method_name not in DECLARATION_USER_HOOKS:
             raise ValueError(
                 f"@impl({method_name!r}): refusing to register on Declaration base "
                 f"class. The method was resolved to Declaration because the "
@@ -474,7 +473,7 @@ def impl(
         is_classmethod = isinstance(existing, classmethod)
         is_staticmethod = isinstance(existing, staticmethod)
 
-        became_top = _register_to_chain(
+        became_top = register_to_chain(
             target_cls, method_name, func, source_module, metas
         )
 
@@ -498,9 +497,9 @@ def impl(
 def unregister_module_impls(module_name: str) -> int:
     removed = 0
 
-    for key in list(_impl_chain):
+    for key in list(impl_chain_registry):
         cls, impl_key = key
-        chain = _impl_chain[key]
+        chain = impl_chain_registry[key]
         was_top_module = _source_matches_module(chain[-1][1], module_name) if chain else False
         removed_seqs = [
             seq for _func, mod, seq in chain if _source_matches_module(mod, module_name)
@@ -515,13 +514,13 @@ def unregister_module_impls(module_name: str) -> int:
         removed += before - len(chain)
 
         for seq in removed_seqs:
-            _impl_metas.pop((cls, impl_key, seq), None)
+            impl_metas.pop((cls, impl_key, seq), None)
 
         if not chain:
             _restore_stub(cls, impl_key)
-            del _impl_chain[key]
+            del impl_chain_registry[key]
         elif was_top_module:
-            _apply_impl(cls, impl_key, chain[-1][0])
+            apply_impl(cls, impl_key, chain[-1][0])
 
     if removed > 0:
         bump_registry_generation()

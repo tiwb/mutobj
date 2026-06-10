@@ -2,8 +2,8 @@
 
 import pytest
 import mutobj
-from mutobj.core._constants import _DECLARED_METHODS
-from mutobj.core._state import _attribute_registry, _class_registry, _impl_chain
+from mutobj.core._constants import DECLARED_METHODS
+from mutobj.core._state import attribute_registry, class_registry, impl_chain_registry
 
 
 def _exec_class(source: str, module_name: str = "test_virtual"):
@@ -44,7 +44,7 @@ class TestInPlaceRedefinition:
             "    def alpha(self) -> str: ...\n"
         )
         cls = g1["Svc"]
-        declared = getattr(cls, _DECLARED_METHODS, set())
+        declared = getattr(cls, DECLARED_METHODS, set())
         assert "alpha" in declared
 
         g2 = _exec_class(
@@ -54,7 +54,7 @@ class TestInPlaceRedefinition:
         cls2 = g2["Svc"]
         assert cls is cls2
 
-        declared2 = getattr(cls, _DECLARED_METHODS, set())
+        declared2 = getattr(cls, DECLARED_METHODS, set())
         assert "beta" in declared2
 
     def test_redefinition_removes_deleted_attrs(self):
@@ -153,8 +153,8 @@ class TestInPlaceRedefinition:
         g = _exec_class("class Fresh(mutobj.Declaration):\n    pass", "test_fresh_mod")
         cls = g["Fresh"]
         key = ("test_fresh_mod", "Fresh")
-        assert key in _class_registry
-        assert _class_registry[key] is cls
+        assert key in class_registry
+        assert class_registry[key] is cls
 
     def test_registries_migrated(self):
         g1 = _exec_class(
@@ -163,8 +163,8 @@ class TestInPlaceRedefinition:
             "    def process(self) -> str: ...\n"
         )
         cls = g1["Migr"]
-        assert cls in _attribute_registry
-        assert (cls, "process") in _impl_chain
+        assert cls in attribute_registry
+        assert (cls, "process") in impl_chain_registry
 
         # Redefine
         g2 = _exec_class(
@@ -177,5 +177,5 @@ class TestInPlaceRedefinition:
         assert cls is cls2
 
         # Registries should point to existing class
-        assert cls in _attribute_registry
-        assert (cls, "process") in _impl_chain
+        assert cls in attribute_registry
+        assert (cls, "process") in impl_chain_registry

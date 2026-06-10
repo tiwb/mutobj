@@ -3,7 +3,7 @@
 import pytest
 import mutobj
 from mutobj import unregister_module_impls
-from mutobj.core._state import _impl_chain, _module_first_seq
+from mutobj.core._state import impl_chain_registry, module_first_seq
 
 
 def _exec_class(source: str, module_name: str = "test_virtual"):
@@ -180,7 +180,7 @@ class TestOverrideChainReload:
         unregister_module_impls("chain6_mod_b")
         assert s.run() == "C"  # C 仍活跃
 
-        # Reimport B（通过 _module_first_seq 复用序号回到原位置）
+        # Reimport B（通过 module_first_seq 复用序号回到原位置）
         def run_b_v2(self) -> str:
             return "B_v2"
         run_b_v2.__module__ = "chain6_mod_b"
@@ -442,14 +442,14 @@ class TestDefaultImplVariants:
 
     def test_all_body_types_are_declared(self):
         """所有方法体形式都被识别为声明方法"""
-        from mutobj.core._constants import _DECLARED_METHODS
+        from mutobj.core._constants import DECLARED_METHODS
 
         class D4(mutobj.Declaration):
             def m1(self) -> str: ...
             def m2(self) -> None: pass
             def m3(self) -> str: return "hello"
 
-        declared = getattr(D4, _DECLARED_METHODS, set())
+        declared = getattr(D4, DECLARED_METHODS, set())
         assert "m1" in declared
         assert "m2" in declared
         assert "m3" in declared

@@ -289,11 +289,11 @@ class TestImplMetaEdgeCases:
             mutobj.impl_meta(Plain.foo)
 
 
-# ===== 与 impl_chain 的解耦：meta 不进 impl_chain 返回值 =====
+# ===== 与 impl_chain 的解耦：meta 不进 impl_chain_registry 返回值 =====
 
 
 class TestImplMetaDoesNotPolluteImplChain:
-    def test_impl_chain_tuple_shape_unchanged(self) -> None:
+    def testimpl_chain_tuple_shape_unchanged(self) -> None:
         class Svc(mutobj.Declaration):
             def run(self) -> int: ...
 

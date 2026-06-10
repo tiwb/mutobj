@@ -6,7 +6,7 @@ import asyncio
 import pytest
 import mutobj
 from mutobj import unregister_module_impls
-from mutobj.core._state import _impl_chain
+from mutobj.core._state import impl_chain_registry
 
 
 def _make_module(module_name: str) -> dict:

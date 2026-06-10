@@ -1,20 +1,19 @@
-# pyright: reportPrivateUsage=false, reportUnusedFunction=false
 from __future__ import annotations
 
 from typing import Any, Callable
 
-from ._fields import AttributeDescriptor, _invalidate_ordered_fields_cache_for
-from ._impls import _apply_impl
+from ._fields import AttributeDescriptor, invalidate_ordered_fields_cache_for
+from ._impls import apply_impl
 from ._state import (
-    _attribute_registry,
-    _class_registry,
-    _classvar_registry,
-    _impl_chain,
-    _module_first_seq,
+    attribute_registry,
+    class_registry,
+    classvar_registry,
+    impl_chain_registry,
+    module_first_seq,
 )
 
 
-def _update_class_inplace(existing: type, new_cls: type) -> None:
+def update_class_inplace(existing: type, new_cls: type) -> None:
     _skip = frozenset({
         "__dict__",
         "__weakref__",
@@ -60,15 +59,15 @@ def _update_class_inplace(existing: type, new_cls: type) -> None:
         existing.__annotations__ = dict(new_cls.__dict__["__annotations__"])
 
 
-def _migrate_registries(existing: type, new_cls: type) -> None:
-    for key in list(_impl_chain):
+def migrate_registries(existing: type, new_cls: type) -> None:
+    for key in list(impl_chain_registry):
         cls, impl_key = key
         if cls is not new_cls:
             continue
 
-        new_chain = _impl_chain.pop(key)
+        new_chain = impl_chain_registry.pop(key)
         existing_key = (existing, impl_key)
-        existing_chain = _impl_chain.get(existing_key, [])
+        existing_chain = impl_chain_registry.get(existing_key, [])
 
         new_default = next(
             ((func, mod, seq) for func, mod, seq in new_chain if mod == "__default__"),
@@ -84,22 +83,22 @@ def _migrate_registries(existing: type, new_cls: type) -> None:
         else:
             existing_chain = new_chain
 
-        _impl_chain[existing_key] = existing_chain
+        impl_chain_registry[existing_key] = existing_chain
         if existing_chain:
-            _apply_impl(existing, impl_key, existing_chain[-1][0])
+            apply_impl(existing, impl_key, existing_chain[-1][0])
 
-    keys_to_migrate = [key for key in _module_first_seq if key[0] is new_cls]
+    keys_to_migrate = [key for key in module_first_seq if key[0] is new_cls]
     for key in keys_to_migrate:
-        _module_first_seq[(existing, key[1], key[2])] = _module_first_seq.pop(key)
+        module_first_seq[(existing, key[1], key[2])] = module_first_seq.pop(key)
 
-    if new_cls in _attribute_registry:
-        _attribute_registry[existing] = _attribute_registry.pop(new_cls)
+    if new_cls in attribute_registry:
+        attribute_registry[existing] = attribute_registry.pop(new_cls)
 
-    if new_cls in _classvar_registry:
-        _classvar_registry[existing] = _classvar_registry.pop(new_cls)
+    if new_cls in classvar_registry:
+        classvar_registry[existing] = classvar_registry.pop(new_cls)
 
-    _invalidate_ordered_fields_cache_for(existing)
+    invalidate_ordered_fields_cache_for(existing)
 
     key = (new_cls.__module__, new_cls.__qualname__)
-    if _class_registry.get(key) is new_cls:
-        _class_registry[key] = existing
+    if class_registry.get(key) is new_cls:
+        class_registry[key] = existing

@@ -2,7 +2,7 @@
 
 import pytest
 import mutobj
-from mutobj.core._state import _impl_chain
+from mutobj.core._state import impl_chain_registry
 
 
 class TestImplDecorator:
@@ -35,8 +35,8 @@ class TestImplDecorator:
             return 42
 
         key = (Counter, "count")
-        assert key in _impl_chain
-        chain = _impl_chain[key]
+        assert key in impl_chain_registry
+        chain = impl_chain_registry[key]
         # 链中应有默认实现和外部实现
         assert len(chain) >= 2
         # 链顶应为外部实现

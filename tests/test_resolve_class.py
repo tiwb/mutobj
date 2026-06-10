@@ -5,7 +5,7 @@ import types
 
 import pytest
 import mutobj
-from mutobj.core._state import _class_registry
+from mutobj.core._state import class_registry
 
 
 # 模块级 Declaration 子类，用于全路径测试
@@ -99,7 +99,7 @@ class AutoImported(mutobj.Declaration):
         finally:
             sys.modules.pop(mod_name, None)
             key = (mod_name, "AutoImported")
-            _class_registry.pop(key, None)
+            class_registry.pop(key, None)
 
     def test_resolve_full_path_import_error(self):
         """import 失败时抛出 ValueError"""

@@ -2,7 +2,7 @@
 
 import pytest
 import mutobj
-from mutobj.core._constants import _DECLARED_CLASSMETHODS, _DECLARED_STATICMETHODS
+from mutobj.core._constants import DECLARED_CLASSMETHODS, DECLARED_STATICMETHODS
 
 
 class TestClassmethodDeclaration:
@@ -16,7 +16,7 @@ class TestClassmethodDeclaration:
                 """创建实例"""
                 ...
 
-        declared = getattr(Factory, _DECLARED_CLASSMETHODS, set())
+        declared = getattr(Factory, DECLARED_CLASSMETHODS, set())
         assert "create" in declared
 
     def test_default_classmethod_runs_without_error(self):
@@ -82,7 +82,7 @@ class TestStaticmethodDeclaration:
                 """辅助函数"""
                 ...
 
-        declared = getattr(Utils, _DECLARED_STATICMETHODS, set())
+        declared = getattr(Utils, DECLARED_STATICMETHODS, set())
         assert "helper" in declared
 
     def test_default_staticmethod_runs_without_error(self):

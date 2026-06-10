@@ -4,8 +4,8 @@ import pytest
 
 import mutobj
 from mutobj import field
-from mutobj.core._fields import AttributeDescriptor, _MISSING
-from mutobj.core._state import _attribute_registry
+from mutobj.core._fields import AttributeDescriptor, MISSING
+from mutobj.core._state import attribute_registry
 
 
 # ── 基本默认值 ──────────────────────────────────────────────────
@@ -338,8 +338,8 @@ class TestDescriptorInternals:
         assert d.has_default is True
 
     def test_missing_sentinel(self):
-        assert repr(_MISSING) == "MISSING"
-        assert bool(_MISSING) is False
+        assert repr(MISSING) == "MISSING"
+        assert bool(MISSING) is False
 
 
 # ── 无注解属性覆盖 ────────────────────────────────────────────
@@ -473,15 +473,15 @@ class TestUnannotatedOverride:
         assert isinstance(desc, AttributeDescriptor)
         assert desc.default == 99
 
-    def test_attribute_registry_updated(self):
-        """_attribute_registry 中子类包含覆盖属性"""
+    def testattribute_registry_updated(self):
+        """attribute_registry 中子类包含覆盖属性"""
         class Base(mutobj.Declaration):
             val: int = 0
 
         class Child(Base):
             val = 99
 
-        assert "val" in _attribute_registry[Child]
+        assert "val" in attribute_registry[Child]
 
     def test_unannotated_override_with_impl(self):
         """无注解覆盖属性在 @impl 方法中可正确访问"""

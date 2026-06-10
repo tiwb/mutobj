@@ -3,8 +3,8 @@
 import pytest
 import mutobj
 from mutobj import unregister_module_impls
-from mutobj.core._constants import _DECLARED_METHODS
-from mutobj.core._state import _impl_chain
+from mutobj.core._constants import DECLARED_METHODS
+from mutobj.core._state import impl_chain_registry
 
 
 class TestImplSourceTracking:
@@ -18,8 +18,8 @@ class TestImplSourceTracking:
             return "ok"
 
         key = (Svc, "run")
-        assert key in _impl_chain
-        chain = _impl_chain[key]
+        assert key in impl_chain_registry
+        chain = impl_chain_registry[key]
         # 链中应有来源为当前模块的条目
         modules = [m for _, m, _ in chain if m != "__default__"]
         assert __name__ in modules
@@ -37,7 +37,7 @@ class TestImplSourceTracking:
             return "v2"
 
         key = (Svc2, "run")
-        chain = _impl_chain[key]
+        chain = impl_chain_registry[key]
         # 同模块就地替换，链中应有 __default__ + 当前模块条目
         modules = [m for _, m, _ in chain]
         assert "__default__" in modules
@@ -171,13 +171,13 @@ class TestUnregisterModuleImpls:
             return "working"
 
         key = (G, "work")
-        chain = _impl_chain[key]
+        chain = impl_chain_registry[key]
         assert any(m == __name__ for _, m, _ in chain)
 
         unregister_module_impls(__name__)
 
         # 外部模块条目应被移除，仅剩 __default__
-        assert all(m == "__default__" for _, m, _ in _impl_chain.get(key, []))
+        assert all(m == "__default__" for _, m, _ in impl_chain_registry.get(key, []))
 
     def test_unregister_nonexistent_module_is_noop(self):
         count = unregister_module_impls("nonexistent.module.xyz")
@@ -192,12 +192,12 @@ class TestUnregisterModuleImpls:
             return "processed"
 
         key = (H, "proc")
-        assert key in _impl_chain
+        assert key in impl_chain_registry
 
         unregister_module_impls(__name__)
 
         # 链仍存在（含 __default__ 条目）
-        assert key in _impl_chain
-        chain = _impl_chain[key]
+        assert key in impl_chain_registry
+        chain = impl_chain_registry[key]
         assert len(chain) == 1
         assert chain[0][1] == "__default__"

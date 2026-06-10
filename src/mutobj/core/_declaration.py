@@ -1,36 +1,35 @@
-# pyright: reportPrivateUsage=false
 from __future__ import annotations
 
 from typing import Any, Self, TypeVar
 
 from ._constants import (
-    _DECLARATION_CHAIN_HOOKS,
-    _DECLARED_CLASSMETHODS,
-    _DECLARED_METHODS,
-    _DECLARED_STATICMETHODS,
-    _MUTABLE_TYPES,
-    _MUTOBJ_RESERVED_DUNDERS,
+    DECLARATION_CHAIN_HOOKS,
+    DECLARED_CLASSMETHODS,
+    DECLARED_METHODS,
+    DECLARED_STATICMETHODS,
+    MUTABLE_TYPES,
+    MUTOBJ_RESERVED_DUNDERS,
 )
 from ._fields import (
     AttributeDescriptor,
     Field,
-    _format_field_names,
-    _get_attribute_descriptor,
-    _get_init_fields,
-    _get_missing_construction_fields,
-    _invalidate_ordered_fields_cache_for,
-    _process_field_annotations,
-    _validate_field_descriptor,
+    format_field_names,
+    get_attribute_descriptor,
+    get_init_fields,
+    get_missing_construction_fields,
+    invalidate_ordered_fields_cache_for,
+    process_field_annotations,
+    validate_field_descriptor,
 )
-from ._reload import _migrate_registries, _update_class_inplace
+from ._reload import migrate_registries, update_class_inplace
 from ._state import (
-    _attribute_registry,
-    _class_registry,
-    _classvar_registry,
-    _impl_chain,
+    attribute_registry,
+    class_registry,
+    classvar_registry,
+    impl_chain_registry,
     bump_registry_generation,
 )
-from ._typing_utils import _is_classvar
+from ._typing_utils import is_classvar
 
 T = TypeVar("T", bound="Declaration")
 
@@ -53,7 +52,7 @@ class DeclarationMeta(type):
         module = namespace.get("__module__", "")
         qualname = namespace.get("__qualname__", name)
         key = (module, qualname)
-        existing = _class_registry.get(key)
+        existing = class_registry.get(key)
 
         declared_methods: set[str] = set()
         declared_classmethods: set[str] = set()
@@ -68,13 +67,13 @@ class DeclarationMeta(type):
 
         if name == "Declaration" and not bases:
             declared: set[str] = set()
-            for hook_name in _DECLARATION_CHAIN_HOOKS:
+            for hook_name in DECLARATION_CHAIN_HOOKS:
                 hook = namespace.get(hook_name)
                 if callable(hook):
                     hook.__mutobj_class__ = cls
-                    _impl_chain.setdefault((cls, hook_name), []).append((hook, "__default__", 0))
+                    impl_chain_registry.setdefault((cls, hook_name), []).append((hook, "__default__", 0))
                     declared.add(hook_name)
-            setattr(cls, _DECLARED_METHODS, declared)
+            setattr(cls, DECLARED_METHODS, declared)
             return cls
 
         annotations = getattr(cls, "__annotations__", {})
@@ -82,15 +81,15 @@ class DeclarationMeta(type):
         parent_classvars: set[str] = set()
         module = namespace.get("__module__", "")
         for base in cls.__mro__[1:]:
-            parent_classvars.update(_classvar_registry.get(base, set()))
+            parent_classvars.update(classvar_registry.get(base, set()))
             base_anns = getattr(base, "__annotations__", {})
             base_module = getattr(base, "__module__", "")
             for base_attr, base_type in base_anns.items():
-                if _is_classvar(base_type, base_module):
+                if is_classvar(base_type, base_module):
                     parent_classvars.add(base_attr)
 
         # 调用共享字段处理函数：Declaration / Extension / Implementation 都走这一步。
-        descriptors, classvar_attrs, inherited_redeclared = _process_field_annotations(
+        descriptors, classvar_attrs, inherited_redeclared = process_field_annotations(
             annotations, namespace, module, cls, parent_classvars,
         )
         attr_registry: dict[str, Any] = {}
@@ -138,7 +137,7 @@ class DeclarationMeta(type):
                     init=value.init,
                     owner_cls=cls,
                 )
-            elif isinstance(value, _MUTABLE_TYPES):
+            elif isinstance(value, MUTABLE_TYPES):
                 type_name = type(value).__name__  # pyright: ignore[reportUnknownArgumentType]
                 raise TypeError(
                     f"Declaration '{name}' attribute '{attr_name}' uses mutable default "
@@ -152,15 +151,15 @@ class DeclarationMeta(type):
                     default=value,
                     owner_cls=cls,
                 )
-            _validate_field_descriptor(name, descriptor)
+            validate_field_descriptor(name, descriptor)
             setattr(cls, attr_name, descriptor)
             attr_registry[attr_name] = parent_desc.annotation
 
-        _attribute_registry[cls] = attr_registry
-        _classvar_registry[cls] = classvar_attrs
+        attribute_registry[cls] = attr_registry
+        classvar_registry[cls] = classvar_attrs
 
         for prop_name, prop_value in namespace.items():
-            if prop_name in _MUTOBJ_RESERVED_DUNDERS:
+            if prop_name in MUTOBJ_RESERVED_DUNDERS:
                 continue
             if isinstance(prop_value, property):
                 descriptor = AttributeDescriptor(
@@ -176,53 +175,53 @@ class DeclarationMeta(type):
                 setattr(cls, prop_name, descriptor)
                 if prop_value.fget is not None:
                     prop_value.fget.__mutobj_class__ = cls
-                    _impl_chain.setdefault((cls, f"{prop_name}.getter"), []).append(
+                    impl_chain_registry.setdefault((cls, f"{prop_name}.getter"), []).append(
                         (prop_value.fget, "__default__", 0)
                     )
                 if prop_value.fset is not None:
                     prop_value.fset.__mutobj_class__ = cls
-                    _impl_chain.setdefault((cls, f"{prop_name}.setter"), []).append(
+                    impl_chain_registry.setdefault((cls, f"{prop_name}.setter"), []).append(
                         (prop_value.fset, "__default__", 0)
                     )
 
         for method_name, method_value in namespace.items():
-            if method_name in _MUTOBJ_RESERVED_DUNDERS:
+            if method_name in MUTOBJ_RESERVED_DUNDERS:
                 continue
             if isinstance(method_value, classmethod):
                 func: Any = method_value.__func__  # pyright: ignore[reportUnknownMemberType, reportUnknownVariableType]
                 declared_classmethods.add(method_name)
-                _impl_chain.setdefault((cls, method_name), []).append((func, "__default__", 0))
+                impl_chain_registry.setdefault((cls, method_name), []).append((func, "__default__", 0))
                 func.__mutobj_class__ = cls
 
-        setattr(cls, _DECLARED_CLASSMETHODS, declared_classmethods)
+        setattr(cls, DECLARED_CLASSMETHODS, declared_classmethods)
 
         for method_name, method_value in namespace.items():
-            if method_name in _MUTOBJ_RESERVED_DUNDERS:
+            if method_name in MUTOBJ_RESERVED_DUNDERS:
                 continue
             if isinstance(method_value, staticmethod):
                 func: Any = method_value.__func__  # pyright: ignore[reportUnknownMemberType, reportUnknownVariableType]
                 declared_staticmethods.add(method_name)
-                _impl_chain.setdefault((cls, method_name), []).append((func, "__default__", 0))
+                impl_chain_registry.setdefault((cls, method_name), []).append((func, "__default__", 0))
                 func.__mutobj_class__ = cls
 
-        setattr(cls, _DECLARED_STATICMETHODS, declared_staticmethods)
+        setattr(cls, DECLARED_STATICMETHODS, declared_staticmethods)
 
         for method_name, method_value in namespace.items():
-            if method_name in _MUTOBJ_RESERVED_DUNDERS:
+            if method_name in MUTOBJ_RESERVED_DUNDERS:
                 continue
             if callable(method_value) and not isinstance(method_value, (classmethod, staticmethod, property)):
                 declared_methods.add(method_name)
-                _impl_chain.setdefault((cls, method_name), []).append((method_value, "__default__", 0))
+                impl_chain_registry.setdefault((cls, method_name), []).append((method_value, "__default__", 0))
                 method_value.__mutobj_class__ = cls
 
-        setattr(cls, _DECLARED_METHODS, declared_methods)
+        setattr(cls, DECLARED_METHODS, declared_methods)
 
         for base in cls.__mro__[1:]:
             if base is cls or base is object:  # pyright: ignore[reportUnnecessaryComparison]
                 continue
 
-            for method_name in getattr(base, _DECLARED_METHODS, set[str]()):
-                if method_name in declared_methods or (cls, method_name) in _impl_chain:
+            for method_name in getattr(base, DECLARED_METHODS, set[str]()):
+                if method_name in declared_methods or (cls, method_name) in impl_chain_registry:
                     continue
 
                 def _make_delegate(b: type, mn: str):
@@ -239,12 +238,12 @@ class DeclarationMeta(type):
                     return delegate
 
                 delegate = _make_delegate(base, method_name)
-                _impl_chain[(cls, method_name)] = [(delegate, "__default__", 0)]
+                impl_chain_registry[(cls, method_name)] = [(delegate, "__default__", 0)]
                 setattr(cls, method_name, delegate)
                 declared_methods.add(method_name)
 
-            for method_name in getattr(base, _DECLARED_CLASSMETHODS, set[str]()):
-                if method_name in declared_classmethods or (cls, method_name) in _impl_chain:
+            for method_name in getattr(base, DECLARED_CLASSMETHODS, set[str]()):
+                if method_name in declared_classmethods or (cls, method_name) in impl_chain_registry:
                     continue
 
                 def _make_cm_delegate(b: type, mn: str):
@@ -266,12 +265,12 @@ class DeclarationMeta(type):
                     return delegate
 
                 delegate = _make_cm_delegate(base, method_name)
-                _impl_chain[(cls, method_name)] = [(delegate, "__default__", 0)]
+                impl_chain_registry[(cls, method_name)] = [(delegate, "__default__", 0)]
                 setattr(cls, method_name, classmethod(delegate))
                 declared_classmethods.add(method_name)
 
-            for method_name in getattr(base, _DECLARED_STATICMETHODS, set[str]()):
-                if method_name in declared_staticmethods or (cls, method_name) in _impl_chain:
+            for method_name in getattr(base, DECLARED_STATICMETHODS, set[str]()):
+                if method_name in declared_staticmethods or (cls, method_name) in impl_chain_registry:
                     continue
 
                 def _make_sm_delegate(b: type, mn: str):
@@ -289,53 +288,53 @@ class DeclarationMeta(type):
                     return delegate
 
                 delegate = _make_sm_delegate(base, method_name)
-                _impl_chain[(cls, method_name)] = [(delegate, "__default__", 0)]
+                impl_chain_registry[(cls, method_name)] = [(delegate, "__default__", 0)]
                 setattr(cls, method_name, staticmethod(delegate))
                 declared_staticmethods.add(method_name)
 
-        setattr(cls, _DECLARED_METHODS, declared_methods)
-        setattr(cls, _DECLARED_CLASSMETHODS, declared_classmethods)
-        setattr(cls, _DECLARED_STATICMETHODS, declared_staticmethods)
+        setattr(cls, DECLARED_METHODS, declared_methods)
+        setattr(cls, DECLARED_CLASSMETHODS, declared_classmethods)
+        setattr(cls, DECLARED_STATICMETHODS, declared_staticmethods)
 
         if existing is not None and existing is not cls:  # pyright: ignore[reportUnnecessaryComparison]
-            _update_class_inplace(existing, cls)
-            _migrate_registries(existing, cls)
+            update_class_inplace(existing, cls)
+            migrate_registries(existing, cls)
             bump_registry_generation()
             return existing
 
-        _class_registry[key] = cls
+        class_registry[key] = cls
         bump_registry_generation()
         return cls
 
     def __call__(cls: type[T], *args: Any, **kwargs: Any) -> T:  # type: ignore[misc]
         obj = cls.__new__(cls, *args, **kwargs)
         if isinstance(obj, cls):
-            from ._implementation import _prepare_implementation_instance
+            from ._implementation import prepare_implementation_instance
 
-            impl = _prepare_implementation_instance(obj)
+            impl = prepare_implementation_instance(obj)
             cls.__init__(obj, *args, **kwargs)
             obj.__post_init__()  # type: ignore[attr-defined]
-            missing_fields = _get_missing_construction_fields(obj)
+            missing_fields = get_missing_construction_fields(obj)
             if missing_fields:
                 raise TypeError(
                     f"{type(obj).__name__} missing field(s) after construction: "
-                    f"{_format_field_names(missing_fields)}. Either pass them to __init__ "
+                    f"{format_field_names(missing_fields)}. Either pass them to __init__ "
                     f"or assign in __post_init__."
                 )
             # Implementation 字段完整性检查：与 Declaration 对标。
             if impl is not None:
-                missing_impl_fields = _get_missing_construction_fields(impl)
+                missing_impl_fields = get_missing_construction_fields(impl)
                 if missing_impl_fields:
                     raise TypeError(
                         f"{type(impl).__name__} missing field(s) after construction: "
-                        f"{_format_field_names(missing_impl_fields)}. Either pass them "
+                        f"{format_field_names(missing_impl_fields)}. Either pass them "
                         f"through to Implementation.__init__ or provide default/default_factory."
                     )
         return obj
 
     def __setattr__(cls, name: str, value: Any) -> None:
         if isinstance(value, AttributeDescriptor):
-            _validate_field_descriptor(cls.__name__, value)
+            validate_field_descriptor(cls.__name__, value)
             super().__setattr__(name, value)
             return
 
@@ -356,7 +355,7 @@ class DeclarationMeta(type):
             super().__setattr__(name, value)
             return
 
-        if isinstance(value, _MUTABLE_TYPES):
+        if isinstance(value, MUTABLE_TYPES):
             type_name = type(value).__name__  # pyright: ignore[reportUnknownArgumentType]
             raise TypeError(
                 f"Declaration '{cls.__name__}' attribute '{name}' uses mutable default "
@@ -383,12 +382,12 @@ class DeclarationMeta(type):
                 readonly=desc.readonly,
                 has_storage=desc.has_storage,
             )
-        _validate_field_descriptor(cls.__name__, new_desc)
+        validate_field_descriptor(cls.__name__, new_desc)
         super().__setattr__(name, new_desc)
 
-        if from_base and cls in _attribute_registry and name not in _attribute_registry[cls]:  # pyright: ignore[reportUnnecessaryContains]
-            _attribute_registry[cls][name] = desc.annotation
-        _invalidate_ordered_fields_cache_for(cls)
+        if from_base and cls in attribute_registry and name not in attribute_registry[cls]:  # pyright: ignore[reportUnnecessaryContains]
+            attribute_registry[cls][name] = desc.annotation
+        invalidate_ordered_fields_cache_for(cls)
 
 
 class Declaration(metaclass=DeclarationMeta):
@@ -407,7 +406,7 @@ class Declaration(metaclass=DeclarationMeta):
 
     def __init__(self, *args: Any, **kwargs: Any) -> None:
         if args:
-            init_fields = _get_init_fields(type(self))
+            init_fields = get_init_fields(type(self))
             if len(args) > len(init_fields):
                 raise TypeError(
                     f"{type(self).__name__}() takes {len(init_fields)} positional "
@@ -423,7 +422,7 @@ class Declaration(metaclass=DeclarationMeta):
                 kwargs[name] = value
 
         for attr_name, value in kwargs.items():
-            desc = _get_attribute_descriptor(type(self), attr_name)
+            desc = get_attribute_descriptor(type(self), attr_name)
             if isinstance(desc, AttributeDescriptor) and not desc.init:
                 raise TypeError(
                     f"{type(self).__name__}() got an unexpected keyword argument '{attr_name}'"

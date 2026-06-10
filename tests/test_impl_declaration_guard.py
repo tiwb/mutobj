@@ -49,7 +49,7 @@ class TestImplChainAPIsRejectNonDeclaration:
         with pytest.raises(TypeError, match="not a mutobj.Declaration subclass"):
             mutobj.impl_has_override(PlainCls.bar)
 
-    def test_impl_chain_rejects_non_declaration(self):
+    def testimpl_chain_rejects_non_declaration(self):
         class PlainCls:
             def bar(self) -> None: ...
 

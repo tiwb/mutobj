@@ -1,4 +1,3 @@
-# pyright: reportUnusedFunction=false
 from __future__ import annotations
 
 import importlib
@@ -39,7 +38,7 @@ def _resolve_annotation_name(base: str, module_name: str) -> Any:
     return obj
 
 
-def _is_classvar(annotation: Any, module_name: str) -> bool:
+def is_classvar(annotation: Any, module_name: str) -> bool:
     if annotation is ClassVarType:
         return True
     origin = _typing_get_origin(annotation)

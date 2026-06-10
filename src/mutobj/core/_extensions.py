@@ -1,4 +1,3 @@
-# pyright: reportPrivateUsage=false
 from __future__ import annotations
 
 import weakref
@@ -6,12 +5,12 @@ from typing import TYPE_CHECKING, Any, Generic, Self, TypeVar
 
 from ._declaration import Declaration
 from ._fields import (
-    _format_field_names,
-    _get_missing_construction_fields,
-    _process_field_annotations,
+    format_field_names,
+    get_missing_construction_fields,
+    process_field_annotations,
 )
-from ._state import _attribute_registry, bump_registry_generation
-from ._typing_utils import _is_classvar
+from ._state import attribute_registry, bump_registry_generation
+from ._typing_utils import is_classvar
 
 T = TypeVar("T", bound=Declaration)
 
@@ -43,7 +42,7 @@ class ExtensionMeta(type):
        且 ``__init_subclass__`` 在类创建后才被调用，无法事后追加 ``__slots__``——
        必须在 ``super().__new__`` 之前写入 namespace。
     2. 扫描本类 annotations，过滤 ClassVar，为每个字段创建 ``AttributeDescriptor``
-       并挂到类上（共享 ``_process_field_annotations``）。
+       并挂到类上（共享 ``process_field_annotations``）。
     3. 解析 ``Extension[T]`` 的目标类并登记到 ``_extension_registry``。
     """
 
@@ -73,10 +72,10 @@ class ExtensionMeta(type):
             base_anns = getattr(base, "__annotations__", {})
             base_module = getattr(base, "__module__", "")
             for base_attr, base_type in base_anns.items():
-                if _is_classvar(base_type, base_module):
+                if is_classvar(base_type, base_module):
                     parent_classvars.add(base_attr)
 
-        descriptors, _classvar_attrs, inherited_redeclared = _process_field_annotations(
+        descriptors, _classvar_attrs, inherited_redeclared = process_field_annotations(
             annotations, namespace, module, cls, parent_classvars,
         )
         attr_registry: dict[str, Any] = {}
@@ -85,10 +84,10 @@ class ExtensionMeta(type):
             attr_registry[attr_name] = descriptor.annotation
         for attr_name, attr_type in inherited_redeclared:
             attr_registry[attr_name] = attr_type
-        # 登记到 _attribute_registry，使 fields(cls) / _get_missing_construction_fields
+        # 登记到 attribute_registry，使 fields(cls) / get_missing_construction_fields
         # 能看到 Extension 子类的字段。
         if attr_registry:
-            _attribute_registry[cls] = attr_registry
+            attribute_registry[cls] = attr_registry
             bump_registry_generation()
 
         # target_class 解析与注册。
@@ -126,14 +125,14 @@ class Extension(Generic[T], metaclass=ExtensionMeta):
             ext = cls.__new__(cls)
             # 字段值存储区：与 Declaration 一致，由 AttributeDescriptor._storage_get 在
             # 首次访问时 lazy 求值默认值；显式赋值的字段直接进 storage。
-            ext._mutobj_storage = {}  # pyright: ignore[reportAttributeAccessIssue]
+            ext._mutobj_storage = {}  # pyright: ignore[reportAttributeAccessIssue, reportPrivateUsage]
             ext.target = instance
             ext.__init__()
-            missing = _get_missing_construction_fields(ext)
+            missing = get_missing_construction_fields(ext)
             if missing:
                 raise TypeError(
                     f"{cls.__name__} missing field(s) after construction: "
-                    f"{_format_field_names(missing)}. Either provide default/default_factory "
+                    f"{format_field_names(missing)}. Either provide default/default_factory "
                     f"or assign in __init__."
                 )
             cache[cls] = ext

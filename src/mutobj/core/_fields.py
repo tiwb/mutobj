@@ -1,11 +1,10 @@
-# pyright: reportPrivateUsage=false, reportUnusedFunction=false
 from __future__ import annotations
 
 from typing import Any, Callable, Mapping, TypeVar
 
-from ._constants import _MUTABLE_TYPES
-from ._state import _attribute_registry
-from ._typing_utils import _is_classvar
+from ._constants import MUTABLE_TYPES
+from ._state import attribute_registry
+from ._typing_utils import is_classvar
 
 _F = TypeVar("_F")
 
@@ -28,7 +27,6 @@ class _MissingSentinel:
 
 
 MISSING: Any = _MissingSentinel()
-_MISSING: Any = MISSING
 
 
 class Field:
@@ -38,11 +36,11 @@ class Field:
 
     def __init__(
         self,
-        default: Any = _MISSING,
+        default: Any = MISSING,
         default_factory: Callable[[], Any] | None = None,
         init: bool = True,
     ) -> None:
-        if default is not _MISSING and default_factory is not None:
+        if default is not MISSING and default_factory is not None:
             raise TypeError("cannot specify both default and default_factory")
         self.default = default
         self.default_factory = default_factory
@@ -51,7 +49,7 @@ class Field:
 
 def field(
     *,
-    default: Any = _MISSING,
+    default: Any = MISSING,
     default_factory: Callable[[], Any] | None = None,
     init: bool = True,
 ) -> Any:
@@ -80,7 +78,7 @@ class AttributeDescriptor:
         self,
         name: str,
         annotation: Any,
-        default: Any = _MISSING,
+        default: Any = MISSING,
         default_factory: Callable[[], Any] | None = None,
         init: bool = True,
         *,
@@ -109,22 +107,22 @@ class AttributeDescriptor:
 
     @property
     def has_default(self) -> bool:
-        return self.default is not _MISSING or self.default_factory is not None
+        return self.default is not MISSING or self.default_factory is not None
 
     @property
     def has_storage(self) -> bool:
         return self._has_storage
 
     @property
-    def getter(self) -> "_AttributeGetterPlaceholder":
-        return _AttributeGetterPlaceholder(self)
+    def getter(self) -> "AttributeGetterPlaceholder":
+        return AttributeGetterPlaceholder(self)
 
     @property
-    def setter(self) -> "_AttributeSetterPlaceholder":
-        return _AttributeSetterPlaceholder(self)
+    def setter(self) -> "AttributeSetterPlaceholder":
+        return AttributeSetterPlaceholder(self)
 
     def get_default(self) -> Any:
-        if self.default is not _MISSING:
+        if self.default is not MISSING:
             return self.default
         if self.default_factory is not None:
             return self.default_factory
@@ -133,7 +131,7 @@ class AttributeDescriptor:
     def make_default(self) -> Any:
         if self.default_factory is not None:
             return self.default_factory()
-        if self.default is not _MISSING:
+        if self.default is not MISSING:
             return self.default
         raise ValueError(f"Attribute '{self.name}' has no default")
 
@@ -151,7 +149,7 @@ class AttributeDescriptor:
                 value = self.default_factory()
                 storage[self.name] = value
                 return value
-            if self.default is not _MISSING:
+            if self.default is not MISSING:
                 return self.default
             raise AttributeError(
                 f"'{type(obj).__name__}' object has no attribute '{self.name}'"
@@ -195,20 +193,20 @@ class AttributeDescriptor:
             ) from exc
 
 
-class _AttributeGetterPlaceholder:
+class AttributeGetterPlaceholder:
     def __init__(self, descriptor: AttributeDescriptor):
-        self._descriptor = descriptor
+        self.descriptor = descriptor
 
 
-class _AttributeSetterPlaceholder:
+class AttributeSetterPlaceholder:
     def __init__(self, descriptor: AttributeDescriptor):
-        self._descriptor = descriptor
+        self.descriptor = descriptor
 
 
 _ordered_fields_cache: dict[type, list[str]] = {}
 
 
-def _invalidate_ordered_fields_cache_for(cls: type) -> None:
+def invalidate_ordered_fields_cache_for(cls: type) -> None:
     for cached_cls in list(_ordered_fields_cache):
         try:
             if issubclass(cached_cls, cls):
@@ -225,14 +223,14 @@ def _get_ordered_fields(cls: type) -> list[str]:
     seen: set[str] = set()
     ordered: list[str] = []
     for klass in cls.__mro__[1:]:
-        if klass in _attribute_registry:
-            for attr_name in _attribute_registry[klass]:
+        if klass in attribute_registry:
+            for attr_name in attribute_registry[klass]:
                 if attr_name not in seen:
                     seen.add(attr_name)
                     ordered.append(attr_name)
 
-    if cls in _attribute_registry:
-        for attr_name in _attribute_registry[cls]:
+    if cls in attribute_registry:
+        for attr_name in attribute_registry[cls]:
             if attr_name not in seen:
                 seen.add(attr_name)
                 ordered.append(attr_name)
@@ -241,7 +239,7 @@ def _get_ordered_fields(cls: type) -> list[str]:
     return ordered
 
 
-def _get_attribute_descriptor(cls: type, attr_name: str) -> AttributeDescriptor | None:
+def get_attribute_descriptor(cls: type, attr_name: str) -> AttributeDescriptor | None:
     for klass in cls.__mro__:
         desc = klass.__dict__.get(attr_name)
         if isinstance(desc, AttributeDescriptor):
@@ -249,11 +247,11 @@ def _get_attribute_descriptor(cls: type, attr_name: str) -> AttributeDescriptor 
     return None
 
 
-def _get_init_fields(cls: type) -> list[str]:
+def get_init_fields(cls: type) -> list[str]:
     return [
         attr_name
         for attr_name in _get_ordered_fields(cls)
-        if (desc := _get_attribute_descriptor(cls, attr_name)) is not None and desc.init
+        if (desc := get_attribute_descriptor(cls, attr_name)) is not None and desc.init
     ]
 
 
@@ -279,18 +277,18 @@ def field_info(field: object, /) -> AttributeDescriptor:
 def fields(cls: type, /) -> Mapping[str, AttributeDescriptor]:
     result: dict[str, AttributeDescriptor] = {}
     for name in _get_ordered_fields(cls):
-        desc = _get_attribute_descriptor(cls, name)
+        desc = get_attribute_descriptor(cls, name)
         if desc is not None:
             result[name] = desc
     return result
 
 
-def _format_field_names(field_names: list[str]) -> str:
+def format_field_names(field_names: list[str]) -> str:
     """将字段名列表格式化为 "'a', 'b', 'c'" 形式，用于错误信息。"""
     return ", ".join(f"'{name}'" for name in field_names)
 
 
-def _validate_field_descriptor(owner_name: str, descriptor: AttributeDescriptor) -> None:
+def validate_field_descriptor(owner_name: str, descriptor: AttributeDescriptor) -> None:
     """校验字段描述符合法性：has_storage + init=False 必须带 default。
 
     供 Declaration / Extension / Implementation 三套元类共享。错误文案不再带
@@ -303,7 +301,7 @@ def _validate_field_descriptor(owner_name: str, descriptor: AttributeDescriptor)
         )
 
 
-def _get_missing_construction_fields(obj: Any) -> list[str]:
+def get_missing_construction_fields(obj: Any) -> list[str]:
     """返回 obj 中所有「必填且尚未赋值」的字段名（按字段声明顺序）。
 
     duck-typing 依赖 obj._mutobj_storage（dict[str, Any]）。供 Declaration /
@@ -320,7 +318,7 @@ def _get_missing_construction_fields(obj: Any) -> list[str]:
     return missing
 
 
-def _process_field_annotations(
+def process_field_annotations(
     annotations: dict[str, Any],
     namespace: dict[str, Any],
     module: str,
@@ -349,7 +347,7 @@ def _process_field_annotations(
     owner_name = owner_cls.__name__
 
     for attr_name, attr_type in annotations.items():
-        if _is_classvar(attr_type, module) or attr_name in parent_classvars:
+        if is_classvar(attr_type, module) or attr_name in parent_classvars:
             classvar_attrs.add(attr_name)
             value = namespace.get(attr_name)
             if isinstance(value, Field):
@@ -373,7 +371,7 @@ def _process_field_annotations(
         elif attr_name in namespace and not isinstance(value, AttributeDescriptor):
             if callable(value) or isinstance(value, property):
                 continue
-            if isinstance(value, _MUTABLE_TYPES):
+            if isinstance(value, MUTABLE_TYPES):
                 type_name = type(value).__name__  # pyright: ignore[reportUnknownArgumentType]
                 raise TypeError(
                     f"'{owner_name}' attribute '{attr_name}' uses mutable default "
@@ -396,7 +394,7 @@ def _process_field_annotations(
             inherited_redeclared.append((attr_name, attr_type))
             continue
 
-        _validate_field_descriptor(owner_name, descriptor)
+        validate_field_descriptor(owner_name, descriptor)
         descriptors.append((attr_name, descriptor))
 
     return descriptors, classvar_attrs, inherited_redeclared
