@@ -40,7 +40,7 @@ class TestInitFalseValidation:
         with pytest.raises(
             TypeError,
             match=(
-                r"Declaration 'Token' field 'value' is init=False but has no default; "
+                r"'Token' field 'value' is init=False but has no default; "
                 r"provide default/default_factory or set init=True\."
             ),
         ):

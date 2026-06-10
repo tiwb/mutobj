@@ -14,6 +14,8 @@ class TestImplementationBridge:
             def get(self) -> str: ...
 
         class LoaderImpl(mutobj.Implementation[Loader]):
+            _loaded: str
+
             def __init__(self, path: str) -> None:
                 owner = mutobj.implementation_owner(self)
                 mutobj.impl_call_super(Loader.__init__, owner, path)
@@ -305,3 +307,126 @@ class TestImplementationInheritance:
                     return "bad"
 
             _ = BadChildImpl
+
+
+class TestImplementationFieldSystem:
+    """验证 Implementation 与 Declaration 共享一致的字段描述符体系。"""
+
+    def test_lazy_default_factory_evaluated_on_first_access(self) -> None:
+        """default_factory 首次访问时 lazy 求值，多次访问返回同一对象。"""
+        calls: list[int] = []
+
+        def make_dict() -> dict[str, int]:
+            calls.append(1)
+            return {}
+
+        class Service(mutobj.Declaration):
+            def get_cache(self) -> dict[str, int]: ...
+
+        class ServiceImpl(mutobj.Implementation[Service]):
+            _cache: dict[str, int] = mutobj.field(default_factory=make_dict)
+
+            def get_cache(self) -> dict[str, int]:
+                return self._cache
+
+        svc = Service()
+        impl = mutobj.implementation_of(svc, ServiceImpl)
+        assert calls == []
+        first = impl._cache
+        assert calls == [1]
+        second = impl._cache
+        assert calls == [1]
+        assert first is second
+
+    def test_required_field_missing_raises(self) -> None:
+        """Impl 必填字段未在 __init__ 中赋值时报 TypeError。"""
+        class Loader(mutobj.Declaration):
+            path: str
+
+        class LoaderImpl(mutobj.Implementation[Loader]):
+            _required: str  # 必填，未在 __init__ 中赋值
+
+        with pytest.raises(TypeError, match="missing field"):
+            Loader(path="/x")
+
+    def test_required_field_assigned_in_init_passes(self) -> None:
+        """必填字段在 __init__ 中赋值后通过完整性检查。"""
+        class Loader(mutobj.Declaration):
+            path: str
+
+            def get_loaded(self) -> str: ...
+
+        class LoaderImpl(mutobj.Implementation[Loader]):
+            _loaded: str
+
+            def __init__(self, path: str) -> None:
+                owner = mutobj.implementation_owner(self)
+                mutobj.impl_call_super(Loader.__init__, owner, path)
+                self._loaded = f"v:{path}"
+
+            def get_loaded(self) -> str:
+                return self._loaded
+
+        loader = Loader(path="/x")
+        assert loader.get_loaded() == "v:/x"
+
+    def test_strict_mode_undeclared_setattr_raises(self) -> None:
+        """严格模式下，未声明字段的 setattr 报 AttributeError。"""
+        class Svc(mutobj.Declaration):
+            pass
+
+        class SvcImpl(mutobj.Implementation[Svc]):
+            def __init__(self) -> None:
+                self._undeclared = 1  # type: ignore[attr-defined]
+
+        with pytest.raises(AttributeError):
+            Svc()
+
+    def test_escape_hatch_allows_arbitrary_setattr(self) -> None:
+        """无 annotation 时 __slots__ = ("__dict__",) 保留完全自由的 setattr。"""
+        class Svc(mutobj.Declaration):
+            def get_state(self) -> str: ...
+
+        class SvcImpl(mutobj.Implementation[Svc]):
+            __slots__ = ("__dict__",)
+
+            def __init__(self) -> None:
+                self._anything = "ok"  # type: ignore[attr-defined]
+                self._another = 42  # type: ignore[attr-defined]
+
+            def get_state(self) -> str:
+                return f"{self._anything}-{self._another}"  # type: ignore[attr-defined]
+
+        svc = Svc()
+        assert svc.get_state() == "ok-42"
+
+    def test_escape_hatch_annotations_still_enforced(self) -> None:
+        """有 annotation 时即使带 __dict__，必填字段未赋值仍报错。"""
+        class Svc(mutobj.Declaration):
+            pass
+
+        class SvcImpl(mutobj.Implementation[Svc]):
+            __slots__ = ("__dict__",)
+            _required: str  # 声明了 annotation，被处理为 descriptor，未赋值 → missing
+
+        with pytest.raises(TypeError, match="missing field"):
+            Svc()
+
+    def test_escape_hatch_hybrid_declared_and_undeclared(self) -> None:
+        """声明字段走 descriptor，未声明走 __dict__，两者共存。"""
+        class Svc(mutobj.Declaration):
+            def get_state(self) -> str: ...
+
+        class SvcImpl(mutobj.Implementation[Svc]):
+            __slots__ = ("__dict__",)
+            _declared: str = "default"  # 声明字段 → descriptor → _mutobj_storage
+
+            def __init__(self) -> None:
+                self._undeclared = "dynamic"  # 未声明 → __dict__
+                self._declared = "override"    # 声明字段 → descriptor
+
+            def get_state(self) -> str:
+                return f"{self._declared}-{self._undeclared}"  # type: ignore[attr-defined]
+
+        svc = Svc()
+        assert svc.get_state() == "override-dynamic"

@@ -3,7 +3,9 @@ from __future__ import annotations
 
 from typing import Any, Callable, Mapping, TypeVar
 
+from ._constants import _MUTABLE_TYPES
 from ._state import _attribute_registry
+from ._typing_utils import _is_classvar
 
 _F = TypeVar("_F")
 
@@ -281,3 +283,120 @@ def fields(cls: type, /) -> Mapping[str, AttributeDescriptor]:
         if desc is not None:
             result[name] = desc
     return result
+
+
+def _format_field_names(field_names: list[str]) -> str:
+    """将字段名列表格式化为 "'a', 'b', 'c'" 形式，用于错误信息。"""
+    return ", ".join(f"'{name}'" for name in field_names)
+
+
+def _validate_field_descriptor(owner_name: str, descriptor: AttributeDescriptor) -> None:
+    """校验字段描述符合法性：has_storage + init=False 必须带 default。
+
+    供 Declaration / Extension / Implementation 三套元类共享。错误文案不再带
+    类别前缀（"Declaration" / "Extension" 等），只用 owner_name 标识所属类。
+    """
+    if descriptor.has_storage and not descriptor.init and not descriptor.has_default:
+        raise TypeError(
+            f"'{owner_name}' field '{descriptor.name}' is init=False but has no "
+            f"default; provide default/default_factory or set init=True."
+        )
+
+
+def _get_missing_construction_fields(obj: Any) -> list[str]:
+    """返回 obj 中所有「必填且尚未赋值」的字段名（按字段声明顺序）。
+
+    duck-typing 依赖 obj._mutobj_storage（dict[str, Any]）。供 Declaration /
+    Extension / Implementation 三处构造完成后的字段完整性检查共用。
+    """
+    missing: list[str] = []
+    storage: dict[str, Any] = obj._mutobj_storage
+    cls: type[Any] = obj.__class__
+    for attr_name, desc in fields(cls).items():
+        # has_default 的字段不需要出现在 storage（lazy default 不写入）；
+        # 只有必填字段（无默认值且 has_storage）才需检查是否被赋值。
+        if desc.has_storage and not desc.has_default and desc.name not in storage:
+            missing.append(attr_name)
+    return missing
+
+
+def _process_field_annotations(
+    annotations: dict[str, Any],
+    namespace: dict[str, Any],
+    module: str,
+    owner_cls: type,
+    parent_classvars: set[str] | None = None,
+) -> tuple[list[tuple[str, AttributeDescriptor]], set[str], list[tuple[str, Any]]]:
+    """扫描本类 annotations，过滤 ClassVar，为每个字段创建 AttributeDescriptor。
+
+    返回:
+        (field_descriptors, classvar_attrs, inherited_redeclared)
+        - field_descriptors: [(attr_name, descriptor), ...]，调用方负责挂载到 cls 上
+          及更新 _attribute_registry
+        - classvar_attrs: 本类 annotations 中识别为 ClassVar 的字段名集合
+        - inherited_redeclared: 父类已有 AttributeDescriptor、本类仅重复声明 annotation
+          但未提供新值的字段 [(attr_name, attr_type), ...]。Declaration 需要将其
+          记入自身 attr_registry 以保持字段顺序；Extension/Implementation 可忽略。
+
+    注意：此函数只处理本类 annotations，不处理父类字段覆写（Declaration 独有逻辑）。
+    Extension / Implementation 的简单字段声明走这一条路即可。
+    """
+    if parent_classvars is None:
+        parent_classvars = set()
+    classvar_attrs: set[str] = set()
+    descriptors: list[tuple[str, AttributeDescriptor]] = []
+    inherited_redeclared: list[tuple[str, Any]] = []
+    owner_name = owner_cls.__name__
+
+    for attr_name, attr_type in annotations.items():
+        if _is_classvar(attr_type, module) or attr_name in parent_classvars:
+            classvar_attrs.add(attr_name)
+            value = namespace.get(attr_name)
+            if isinstance(value, Field):
+                raise TypeError(
+                    f"'{owner_name}' attribute '{attr_name}' is ClassVar "
+                    f"and does not support field(default_factory=...). "
+                    f"Use a plain default value or a module-level constant instead."
+                )
+            continue
+
+        value = namespace.get(attr_name)
+        if isinstance(value, Field):
+            descriptor = AttributeDescriptor(
+                attr_name,
+                attr_type,
+                default=value.default,
+                default_factory=value.default_factory,
+                init=value.init,
+                owner_cls=owner_cls,
+            )
+        elif attr_name in namespace and not isinstance(value, AttributeDescriptor):
+            if callable(value) or isinstance(value, property):
+                continue
+            if isinstance(value, _MUTABLE_TYPES):
+                type_name = type(value).__name__  # pyright: ignore[reportUnknownArgumentType]
+                raise TypeError(
+                    f"'{owner_name}' attribute '{attr_name}' uses mutable default "
+                    f"value {type_name}. "
+                    f"Use field(default_factory={type_name}) instead."
+                )
+            descriptor = AttributeDescriptor(
+                attr_name,
+                attr_type,
+                default=value,
+                owner_cls=owner_cls,
+            )
+        elif not hasattr(owner_cls, attr_name) or not isinstance(
+            getattr(owner_cls, attr_name), AttributeDescriptor
+        ):
+            descriptor = AttributeDescriptor(attr_name, attr_type, owner_cls=owner_cls)
+        else:
+            # 父类已是 AttributeDescriptor、本类无新值：仅重复声明 annotation。
+            # Declaration 需要记入自身 attr_registry，Extension/Implementation 不需。
+            inherited_redeclared.append((attr_name, attr_type))
+            continue
+
+        _validate_field_descriptor(owner_name, descriptor)
+        descriptors.append((attr_name, descriptor))
+
+    return descriptors, classvar_attrs, inherited_redeclared

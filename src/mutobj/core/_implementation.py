@@ -10,14 +10,16 @@ from ._constants import (
     _DECLARED_METHODS,
 )
 from ._declaration import Declaration
-from ._fields import _get_attribute_descriptor
+from ._fields import _get_attribute_descriptor, _process_field_annotations
 from ._impls import _apply_impl, _register_to_chain
 from ._state import (
+    _attribute_registry,
     _implementation_class_registry,
     _implementation_instance_registry,
     _implementation_owner_registry,
     bump_registry_generation,
 )
+from ._typing_utils import _is_classvar
 
 T = TypeVar("T", bound=Declaration)
 IT = TypeVar("IT", bound="Implementation[Any]")
@@ -32,11 +34,16 @@ def _cleanup_implementation_owner(impl_id: int) -> None:
 
 
 def _resolve_target_class(impl_cls: type) -> type[Declaration] | None:
+    # 延迟绑定——Implementation 基类本身进入元类 __new__ 时 Implementation 还未赋值。
+    impl_base = globals().get("Implementation")
     for base in impl_cls.__dict__.get("__orig_bases__", ()):
         origin = getattr(base, "__origin__", None)
         if not isinstance(origin, type):
             continue
-        if origin is not Implementation and not issubclass(origin, Implementation):
+        if impl_base is None:
+            # 初次定义 Implementation 本身时跳过。
+            continue
+        if origin is not impl_base and not issubclass(origin, impl_base):
             continue
         args = getattr(base, "__args__", ())
         if not args:
@@ -267,19 +274,89 @@ def _prepare_implementation_instance(decl: Declaration) -> Any | None:
             f"{impl_cls.__name__}.__new__ returned {type(impl).__name__}, "
             f"expected {impl_cls.__name__}"
         )
+    # 始终初始化 _mutobj_storage：基类 __slots__ 保证了它的存在。
+    # 声明字段赋值时 AttributeDescriptor 写入此处；未声明（有 __dict__ 时）走 __dict__。
+    impl._mutobj_storage = {}  # pyright: ignore[reportAttributeAccessIssue]
     _bind_implementation_instance(decl, cast(object, impl))
     return impl
 
 
-class Implementation(Generic[T]):
-    _target_class: type[T] | None = None
+class ImplementationMeta(type):
+    """Implementation 元类。与 ExtensionMeta 对称。
 
-    def __init_subclass__(cls, **kwargs: Any) -> None:
-        super().__init_subclass__(**kwargs)
+    职责：
+    1. 默认注入 ``__slots__ = ()``，避免子类默认获得 ``__dict__``。
+    2. 扫描 annotations 创建 AttributeDescriptor（调共享 ``_process_field_annotations``）。
+    3. 解析 ``Implementation[T]`` 的 T 并调 ``_register_implementation_class``。
+
+    子类可显式 ``__slots__ = ("__dict__",)`` 附加 ``__dict__``：annotations 仍处理为
+    descriptor（声明字段走 ``_mutobj_storage``），未声明字段自然走 ``__dict__``。
+    """
+
+    def __new__(
+        mcs,
+        name: str,
+        bases: tuple[type, ...],
+        namespace: dict[str, Any],
+    ) -> ImplementationMeta:
+        # 子类若已显式 __slots__ 含 __dict__，则不注入 __slots__ = ()——
+        # 否则 __slots__ = () 会覆盖用户的声明（Python 子类 __slots__ 只增不减）。
+        user_slots = namespace.get("__slots__")
+        user_has_dict = (
+            user_slots is not None
+            and "__dict__" in (user_slots if isinstance(user_slots, (tuple, list)) else (user_slots,))
+        )
+
+        if name != "Implementation" and "__slots__" not in namespace and not user_has_dict:
+            namespace["__slots__"] = ()
+
+        cls = super().__new__(mcs, name, bases, namespace)
+
+        if name == "Implementation" and not bases:
+            return cls
+
+        # Python 3.14 PEP 649 lazy annotations 下 namespace["__annotations__"] 可能为空，
+        # 必须走 getattr(cls, "__annotations__")。
+        annotations = getattr(cls, "__annotations__", {})
+        module = namespace.get("__module__", "")
+        parent_classvars: set[str] = set()
+        for base in cls.__mro__[1:]:
+            base_anns = getattr(base, "__annotations__", {})
+            base_module = getattr(base, "__module__", "")
+            for base_attr, base_type in base_anns.items():
+                if _is_classvar(base_type, base_module):
+                    parent_classvars.add(base_attr)
+
+        descriptors, _classvar_attrs, inherited_redeclared = _process_field_annotations(
+            annotations, namespace, module, cls, parent_classvars,
+        )
+        attr_registry: dict[str, Any] = {}
+        for attr_name, descriptor in descriptors:
+            type.__setattr__(cls, attr_name, descriptor)
+            attr_registry[attr_name] = descriptor.annotation
+        for attr_name, attr_type in inherited_redeclared:
+            attr_registry[attr_name] = attr_type
+        if attr_registry:
+            _attribute_registry[cls] = attr_registry
+            bump_registry_generation()
+
+        # target_class 解析与注册（原 __init_subclass__ 逻辑平移）。
         target_cls = _resolve_target_class(cls)
-        if target_cls is None:
-            return
-        _register_implementation_class(cls, target_cls)
+        if target_cls is not None:
+            _register_implementation_class(cls, target_cls)
+
+        return cls
+
+
+class Implementation(Generic[T], metaclass=ImplementationMeta):
+    # 字段走 _mutobj_storage + descriptor。
+    # 子类可 __slots__ = ("__dict__",) 附加 __dict__：声明字段 → descriptor，未声明 → __dict__。
+    # _target_class 是类属性（_register_implementation_class 中赋值），
+    # 不能列入 __slots__——否则与同名类级默认值冲突，import 期 ValueError。
+    # __weakref__ 不需要：_implementation_owner_registry 用 id(impl) 做 key、
+    # weakref.finalize 绑在 decl 上，impl 实例不需要支持弱引用。
+    __slots__ = ("_mutobj_storage",)
+    _target_class: type[T] | None = None
 
 
 def implementation_class(

@@ -454,9 +454,10 @@ class TestExtensionField:
 
 
 class TestExtensionSetattr:
-    """测试 Extension.__setattr__ 不代理到 Declaration"""
+    """测试 Extension 严格模式：未声明字段 setattr 报错，已声明字段 setattr 不代理到 Declaration。"""
 
-    def test_public_attr_stays_on_extension(self):
+    def test_undeclared_public_attr_rejected(self):
+        """未声明字段赋值报 AttributeError（严格模式）。"""
         class Host(mutobj.Declaration):
             name: str = "host"
 
@@ -465,11 +466,11 @@ class TestExtensionSetattr:
 
         h = Host()
         ext = HostExt.get_or_create(h)
-        ext.callback = lambda: "ext"  # type: ignore
-        assert ext.callback() == "ext"  # type: ignore
-        assert not hasattr(h, "callback")
+        with pytest.raises(AttributeError):
+            ext.callback = lambda: "ext"  # type: ignore
 
-    def test_overwrite_method_on_extension(self):
+    def test_overwrite_method_on_extension_rejected(self):
+        """覆写方法名（未声明为字段）报 AttributeError。"""
         class Target(mutobj.Declaration):
             name: str
 
@@ -480,12 +481,11 @@ class TestExtensionSetattr:
         t = Target(name="t")
         ext = TargetExt.get_or_create(t)
         assert ext.transform() == "default"
+        with pytest.raises(AttributeError):
+            ext.transform = lambda: "custom"  # type: ignore
 
-        ext.transform = lambda: "custom"  # type: ignore
-        assert ext.transform() == "custom"  # type: ignore
-        assert not hasattr(t, "transform")
-
-    def test_private_attr_stays_on_extension(self):
+    def test_declared_field_setattr_does_not_leak_to_declaration(self):
+        """已声明字段赋值只作用于 Extension、不代理到宇主 Declaration。"""
         class Svc(mutobj.Declaration):
             name: str
 
@@ -496,6 +496,7 @@ class TestExtensionSetattr:
         ext = SvcExt.get_or_create(s)
         ext._state = 42
         assert ext._state == 42
+        assert not hasattr(s, "_state")
 
     def test_instance_is_public(self):
         class Obj(mutobj.Declaration):
@@ -508,3 +509,97 @@ class TestExtensionSetattr:
         ext = ObjExt.get_or_create(o)
         assert ext.target is o
         assert ext.target.value == 10
+
+
+class TestExtensionFieldSystem:
+    """验证 Extension 与 Declaration 共享一致的字段描述符体系。"""
+
+    def test_lazy_default_factory_evaluated_on_first_access(self):
+        """default_factory 首次访问时 lazy 求值、后续访问返回同一对象。"""
+        calls: list[int] = []
+
+        def make_list() -> list[int]:
+            calls.append(1)
+            return []
+
+        class Host(mutobj.Declaration):
+            pass
+
+        class HostExt(mutobj.Extension[Host]):
+            items: list[int] = mutobj.field(default_factory=make_list)
+
+        h = Host()
+        ext = HostExt.get_or_create(h)
+        # __init__ 未访问 items，不该触发工厂。
+        assert calls == []
+        first = ext.items
+        assert calls == [1]
+        # 同一 ext 再次访问不重复求值、返回同一对象。
+        second = ext.items
+        assert calls == [1]
+        assert first is second
+
+    def test_required_field_missing_raises(self):
+        """必填字段未赋值时 get_or_create 报 TypeError。"""
+        class Host(mutobj.Declaration):
+            pass
+
+        class HostExt(mutobj.Extension[Host]):
+            required: str  # 无默认值
+
+        h = Host()
+        with pytest.raises(TypeError, match="missing field"):
+            HostExt.get_or_create(h)
+
+    def test_required_field_assigned_in_init_passes(self):
+        """必填字段在 __init__ 赋值后能通过完整性检查。"""
+        class Host(mutobj.Declaration):
+            pass
+
+        class HostExt(mutobj.Extension[Host]):
+            required: str
+
+            def __init__(self) -> None:
+                self.required = "ok"
+
+        h = Host()
+        ext = HostExt.get_or_create(h)
+        assert ext.required == "ok"
+
+    def test_subclass_inherits_parent_fields(self):
+        """子类能访问父类声明的字段。"""
+        class Host(mutobj.Declaration):
+            pass
+
+        class BaseExt(mutobj.Extension[Host]):
+            base_field: int = 1
+
+        class ChildExt(BaseExt):
+            child_field: str = "x"
+
+        h = Host()
+        ext = ChildExt.get_or_create(h)
+        assert ext.base_field == 1
+        assert ext.child_field == "x"
+
+    def test_classvar_excluded_from_field_system(self):
+        """ClassVar 不被处理为实例字段，保持为类属性。"""
+        from typing import ClassVar
+
+        class Host(mutobj.Declaration):
+            pass
+
+        class HostExt(mutobj.Extension[Host]):
+            shared: ClassVar[int] = 99
+            instance_field: int = 0
+
+        h = Host()
+        ext = HostExt.get_or_create(h)
+        # ClassVar 仍是类属性，读到 99；实例字段 lazy default 读到 0。
+        assert ext.shared == 99
+        assert HostExt.shared == 99
+        assert ext.instance_field == 0
+        # ClassVar 不在 cls.__dict__ 里成为 AttributeDescriptor。
+        from mutobj.core._fields import AttributeDescriptor
+        assert not isinstance(HostExt.__dict__.get("shared"), AttributeDescriptor)
+        assert isinstance(HostExt.__dict__.get("instance_field"), AttributeDescriptor)

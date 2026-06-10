@@ -14,10 +14,13 @@ from ._constants import (
 from ._fields import (
     AttributeDescriptor,
     Field,
+    _format_field_names,
     _get_attribute_descriptor,
-    fields as _get_fields,
     _get_init_fields,
+    _get_missing_construction_fields,
     _invalidate_ordered_fields_cache_for,
+    _process_field_annotations,
+    _validate_field_descriptor,
 )
 from ._reload import _migrate_registries, _update_class_inplace
 from ._state import (
@@ -36,29 +39,6 @@ def _property_return_annotation(prop: property) -> Any:
     if prop.fget is None:
         return Any
     return getattr(prop.fget, "__annotations__", {}).get("return", Any)
-
-
-def _format_field_names(field_names: list[str]) -> str:
-    return ", ".join(f"'{name}'" for name in field_names)
-
-
-def _validate_declaration_field(owner_name: str, descriptor: AttributeDescriptor) -> None:
-    if descriptor.has_storage and not descriptor.init and not descriptor.has_default:
-        raise TypeError(
-            f"Declaration '{owner_name}' field '{descriptor.name}' is init=False but has no "
-            f"default; provide default/default_factory or set init=True."
-        )
-
-
-def _get_missing_construction_fields(obj: Declaration) -> list[str]:
-    missing: list[str] = []
-    storage: dict[str, Any] = obj._mutobj_storage  # pyright: ignore[reportPrivateUsage]
-    for attr_name, desc in _get_fields(type(obj)).items():
-        # has_default 的字段不需要出现在 storage（lazy default 不写入）；
-        # 只有必填字段（无默认值且 has_storage）才需检查是否被赋值。
-        if desc.has_storage and not desc.has_default and desc.name not in storage:
-            missing.append(attr_name)
-    return missing
 
 
 class DeclarationMeta(type):
@@ -109,54 +89,17 @@ class DeclarationMeta(type):
                 if _is_classvar(base_type, base_module):
                     parent_classvars.add(base_attr)
 
+        # 调用共享字段处理函数：Declaration / Extension / Implementation 都走这一步。
+        descriptors, classvar_attrs, inherited_redeclared = _process_field_annotations(
+            annotations, namespace, module, cls, parent_classvars,
+        )
         attr_registry: dict[str, Any] = {}
-        classvar_attrs: set[str] = set()
-        for attr_name, attr_type in annotations.items():
-            if _is_classvar(attr_type, module) or attr_name in parent_classvars:
-                classvar_attrs.add(attr_name)
-                value = namespace.get(attr_name)
-                if isinstance(value, Field):
-                    raise TypeError(
-                        f"Declaration '{name}' attribute '{attr_name}' is ClassVar "
-                        f"and does not support field(default_factory=...). "
-                        f"Use a plain default value or a module-level constant instead."
-                    )
-                continue
-
-            value = namespace.get(attr_name)
-            if isinstance(value, Field):
-                descriptor = AttributeDescriptor(
-                    attr_name,
-                    attr_type,
-                    default=value.default,
-                    default_factory=value.default_factory,
-                    init=value.init,
-                    owner_cls=cls,
-                )
-            elif attr_name in namespace and not isinstance(value, AttributeDescriptor):
-                if callable(value) or isinstance(value, property):
-                    continue
-                if isinstance(value, _MUTABLE_TYPES):
-                    type_name = type(value).__name__  # pyright: ignore[reportUnknownArgumentType]
-                    raise TypeError(
-                        f"Declaration '{name}' attribute '{attr_name}' uses mutable default "
-                        f"value {type_name}. "
-                        f"Use field(default_factory={type_name}) instead."
-                    )
-                descriptor = AttributeDescriptor(
-                    attr_name,
-                    attr_type,
-                    default=value,
-                    owner_cls=cls,
-                )
-            elif not hasattr(cls, attr_name) or not isinstance(getattr(cls, attr_name), AttributeDescriptor):
-                descriptor = AttributeDescriptor(attr_name, attr_type, owner_cls=cls)
-            else:
-                attr_registry[attr_name] = attr_type
-                continue
-
-            _validate_declaration_field(name, descriptor)
+        for attr_name, descriptor in descriptors:
             setattr(cls, attr_name, descriptor)
+            attr_registry[attr_name] = descriptor.annotation
+        # 父类已有描述符、本类仅重复声明 annotation 的字段：
+        # 记入本类 registry 以保持字段顺序（与原逻辑一致）。
+        for attr_name, attr_type in inherited_redeclared:
             attr_registry[attr_name] = attr_type
 
         own_annotations = getattr(cls, "__annotations__", {})
@@ -209,7 +152,7 @@ class DeclarationMeta(type):
                     default=value,
                     owner_cls=cls,
                 )
-            _validate_declaration_field(name, descriptor)
+            _validate_field_descriptor(name, descriptor)
             setattr(cls, attr_name, descriptor)
             attr_registry[attr_name] = parent_desc.annotation
 
@@ -369,7 +312,7 @@ class DeclarationMeta(type):
         if isinstance(obj, cls):
             from ._implementation import _prepare_implementation_instance
 
-            _prepare_implementation_instance(obj)
+            impl = _prepare_implementation_instance(obj)
             cls.__init__(obj, *args, **kwargs)
             obj.__post_init__()  # type: ignore[attr-defined]
             missing_fields = _get_missing_construction_fields(obj)
@@ -379,11 +322,20 @@ class DeclarationMeta(type):
                     f"{_format_field_names(missing_fields)}. Either pass them to __init__ "
                     f"or assign in __post_init__."
                 )
+            # Implementation 字段完整性检查：与 Declaration 对标。
+            if impl is not None:
+                missing_impl_fields = _get_missing_construction_fields(impl)
+                if missing_impl_fields:
+                    raise TypeError(
+                        f"{type(impl).__name__} missing field(s) after construction: "
+                        f"{_format_field_names(missing_impl_fields)}. Either pass them "
+                        f"through to Implementation.__init__ or provide default/default_factory."
+                    )
         return obj
 
     def __setattr__(cls, name: str, value: Any) -> None:
         if isinstance(value, AttributeDescriptor):
-            _validate_declaration_field(cls.__name__, value)
+            _validate_field_descriptor(cls.__name__, value)
             super().__setattr__(name, value)
             return
 
@@ -431,7 +383,7 @@ class DeclarationMeta(type):
                 readonly=desc.readonly,
                 has_storage=desc.has_storage,
             )
-        _validate_declaration_field(cls.__name__, new_desc)
+        _validate_field_descriptor(cls.__name__, new_desc)
         super().__setattr__(name, new_desc)
 
         if from_base and cls in _attribute_registry and name not in _attribute_registry[cls]:  # pyright: ignore[reportUnnecessaryContains]
