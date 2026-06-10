@@ -3,8 +3,6 @@
 import pytest
 import mutobj
 from mutobj import unregister_module_impls
-from mutobj.core._constants import DECLARED_METHODS
-from mutobj.core._state import impl_chain_registry
 
 
 class TestImplSourceTracking:
@@ -18,10 +16,10 @@ class TestImplSourceTracking:
             return "ok"
 
         key = (Svc, "run")
-        assert key in impl_chain_registry
-        chain = impl_chain_registry[key]
+        assert key[1] in key[0].__mutobj_class_meta__.impl_chains
+        chain = key[0].__mutobj_class_meta__.impl_chains[key[1]]
         # 链中应有来源为当前模块的条目
-        modules = [m for _, m, _ in chain if m != "__default__"]
+        modules = [entry.source_module for entry in chain if entry.source_module != "__default__"]
         assert __name__ in modules
 
     def test_impl_override_updates_chain(self):
@@ -37,12 +35,11 @@ class TestImplSourceTracking:
             return "v2"
 
         key = (Svc2, "run")
-        chain = impl_chain_registry[key]
+        chain = key[0].__mutobj_class_meta__.impl_chains[key[1]]
         # 同模块就地替换，链中应有 __default__ + 当前模块条目
-        modules = [m for _, m, _ in chain]
+        modules = [entry.source_module for entry in chain]
         assert "__default__" in modules
         assert __name__ in modules
-
 
 class TestUnregisterModuleImpls:
 
@@ -171,13 +168,13 @@ class TestUnregisterModuleImpls:
             return "working"
 
         key = (G, "work")
-        chain = impl_chain_registry[key]
-        assert any(m == __name__ for _, m, _ in chain)
+        chain = key[0].__mutobj_class_meta__.impl_chains[key[1]]
+        assert any(entry.source_module == __name__ for entry in chain)
 
         unregister_module_impls(__name__)
 
         # 外部模块条目应被移除，仅剩 __default__
-        assert all(m == "__default__" for _, m, _ in impl_chain_registry.get(key, []))
+        assert all(entry.source_module == "__default__" for entry in key[0].__mutobj_class_meta__.impl_chains.get(key[1], []))
 
     def test_unregister_nonexistent_module_is_noop(self):
         count = unregister_module_impls("nonexistent.module.xyz")
@@ -192,12 +189,12 @@ class TestUnregisterModuleImpls:
             return "processed"
 
         key = (H, "proc")
-        assert key in impl_chain_registry
+        assert key[1] in key[0].__mutobj_class_meta__.impl_chains
 
         unregister_module_impls(__name__)
 
         # 链仍存在（含 __default__ 条目）
-        assert key in impl_chain_registry
-        chain = impl_chain_registry[key]
+        assert key[1] in key[0].__mutobj_class_meta__.impl_chains
+        chain = key[0].__mutobj_class_meta__.impl_chains[key[1]]
         assert len(chain) == 1
-        assert chain[0][1] == "__default__"
+        assert chain[0].source_module == "__default__"

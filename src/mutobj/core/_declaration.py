@@ -1,12 +1,10 @@
 from __future__ import annotations
 
-from typing import Any, Self, TypeVar
+from typing import Any, Callable, ClassVar, Self, TypeVar, cast
 
+from ._classmeta import DeclarationClassMeta, ImplChainEntry
 from ._constants import (
     DECLARATION_CHAIN_HOOKS,
-    DECLARED_CLASSMETHODS,
-    DECLARED_METHODS,
-    DECLARED_STATICMETHODS,
     MUTABLE_TYPES,
     MUTOBJ_RESERVED_DUNDERS,
 )
@@ -22,16 +20,19 @@ from ._fields import (
     validate_field_descriptor,
 )
 from ._reload import migrate_registries, update_class_inplace
-from ._state import (
-    attribute_registry,
-    class_registry,
-    classvar_registry,
-    impl_chain_registry,
+from ._discovery import (
     bump_registry_generation,
+    class_registry,
 )
 from ._typing_utils import is_classvar
 
+
 T = TypeVar("T", bound="Declaration")
+
+
+def _decl_meta(cls: type) -> DeclarationClassMeta:
+    """Get the DeclarationClassMeta for a Declaration subclass."""
+    return cast(DeclarationClassMeta, getattr(cls, "__mutobj_class_meta__"))
 
 
 def _property_return_annotation(prop: property) -> Any:
@@ -66,22 +67,26 @@ class DeclarationMeta(type):
         cls = super().__new__(mcs, name, bases, namespace)
 
         if name == "Declaration" and not bases:
-            declared: set[str] = set()
+            cls.__mutobj_class_meta__ = DeclarationClassMeta()
             for hook_name in DECLARATION_CHAIN_HOOKS:
                 hook = namespace.get(hook_name)
                 if callable(hook):
                     hook.__mutobj_class__ = cls
-                    impl_chain_registry.setdefault((cls, hook_name), []).append((hook, "__default__", 0))
-                    declared.add(hook_name)
-            setattr(cls, DECLARED_METHODS, declared)
+                    _decl_meta(cls).impl_chains.setdefault(hook_name, []).append(ImplChainEntry(func=hook, source_module="__default__", seq=0))
+                    _decl_meta(cls).methods.add(hook_name)  # type: ignore[reportAttributeAccessIssue]
             return cls
 
         annotations = getattr(cls, "__annotations__", {})
 
+        # 初始化 per-class 元数据容器
+        cls.__mutobj_class_meta__ = DeclarationClassMeta()  # type: ignore[reportAttributeAccessIssue]
+
         parent_classvars: set[str] = set()
         module = namespace.get("__module__", "")
         for base in cls.__mro__[1:]:
-            parent_classvars.update(classvar_registry.get(base, set()))
+            base_meta = getattr(base, "__mutobj_class_meta__", None)
+            if base_meta is not None:
+                parent_classvars.update(base_meta.classvars)
             base_anns = getattr(base, "__annotations__", {})
             base_module = getattr(base, "__module__", "")
             for base_attr, base_type in base_anns.items():
@@ -155,8 +160,10 @@ class DeclarationMeta(type):
             setattr(cls, attr_name, descriptor)
             attr_registry[attr_name] = parent_desc.annotation
 
-        attribute_registry[cls] = attr_registry
-        classvar_registry[cls] = classvar_attrs
+        _decl_meta(cls).fields = attr_registry
+        _decl_meta(cls).classvars = classvar_attrs
+
+        mc = _decl_meta(cls)
 
         for prop_name, prop_value in namespace.items():
             if prop_name in MUTOBJ_RESERVED_DUNDERS:
@@ -175,13 +182,13 @@ class DeclarationMeta(type):
                 setattr(cls, prop_name, descriptor)
                 if prop_value.fget is not None:
                     prop_value.fget.__mutobj_class__ = cls
-                    impl_chain_registry.setdefault((cls, f"{prop_name}.getter"), []).append(
-                        (prop_value.fget, "__default__", 0)
+                    mc.impl_chains.setdefault(f"{prop_name}.getter", []).append(
+                        ImplChainEntry(func=prop_value.fget, source_module="__default__", seq=0)
                     )
                 if prop_value.fset is not None:
                     prop_value.fset.__mutobj_class__ = cls
-                    impl_chain_registry.setdefault((cls, f"{prop_name}.setter"), []).append(
-                        (prop_value.fset, "__default__", 0)
+                    mc.impl_chains.setdefault(f"{prop_name}.setter", []).append(
+                        ImplChainEntry(func=prop_value.fset, source_module="__default__", seq=0)
                     )
 
         for method_name, method_value in namespace.items():
@@ -190,10 +197,8 @@ class DeclarationMeta(type):
             if isinstance(method_value, classmethod):
                 func: Any = method_value.__func__  # pyright: ignore[reportUnknownMemberType, reportUnknownVariableType]
                 declared_classmethods.add(method_name)
-                impl_chain_registry.setdefault((cls, method_name), []).append((func, "__default__", 0))
+                mc.impl_chains.setdefault(method_name, []).append(ImplChainEntry(func=func, source_module="__default__", seq=0))
                 func.__mutobj_class__ = cls
-
-        setattr(cls, DECLARED_CLASSMETHODS, declared_classmethods)
 
         for method_name, method_value in namespace.items():
             if method_name in MUTOBJ_RESERVED_DUNDERS:
@@ -201,27 +206,27 @@ class DeclarationMeta(type):
             if isinstance(method_value, staticmethod):
                 func: Any = method_value.__func__  # pyright: ignore[reportUnknownMemberType, reportUnknownVariableType]
                 declared_staticmethods.add(method_name)
-                impl_chain_registry.setdefault((cls, method_name), []).append((func, "__default__", 0))
+                mc.impl_chains.setdefault(method_name, []).append(ImplChainEntry(func=func, source_module="__default__", seq=0))
                 func.__mutobj_class__ = cls
-
-        setattr(cls, DECLARED_STATICMETHODS, declared_staticmethods)
 
         for method_name, method_value in namespace.items():
             if method_name in MUTOBJ_RESERVED_DUNDERS:
                 continue
             if callable(method_value) and not isinstance(method_value, (classmethod, staticmethod, property)):
                 declared_methods.add(method_name)
-                impl_chain_registry.setdefault((cls, method_name), []).append((method_value, "__default__", 0))
+                mc.impl_chains.setdefault(method_name, []).append(ImplChainEntry(func=method_value, source_module="__default__", seq=0))
                 method_value.__mutobj_class__ = cls
 
-        setattr(cls, DECLARED_METHODS, declared_methods)
-
+        # 委托生成：父类声明的方法自动继承到子类
         for base in cls.__mro__[1:]:
             if base is cls or base is object:  # pyright: ignore[reportUnnecessaryComparison]
                 continue
+            base_meta = getattr(base, "__mutobj_class_meta__", None)
+            if base_meta is None:
+                continue
 
-            for method_name in getattr(base, DECLARED_METHODS, set[str]()):
-                if method_name in declared_methods or (cls, method_name) in impl_chain_registry:
+            for method_name in base_meta.methods:
+                if method_name in declared_methods or method_name in mc.impl_chains:
                     continue
 
                 def _make_delegate(b: type, mn: str):
@@ -238,12 +243,12 @@ class DeclarationMeta(type):
                     return delegate
 
                 delegate = _make_delegate(base, method_name)
-                impl_chain_registry[(cls, method_name)] = [(delegate, "__default__", 0)]
+                mc.impl_chains[method_name] = [ImplChainEntry(func=delegate, source_module="__default__", seq=0)]
                 setattr(cls, method_name, delegate)
                 declared_methods.add(method_name)
 
-            for method_name in getattr(base, DECLARED_CLASSMETHODS, set[str]()):
-                if method_name in declared_classmethods or (cls, method_name) in impl_chain_registry:
+            for method_name in base_meta.classmethods:
+                if method_name in declared_classmethods or method_name in mc.impl_chains:
                     continue
 
                 def _make_cm_delegate(b: type, mn: str):
@@ -265,12 +270,12 @@ class DeclarationMeta(type):
                     return delegate
 
                 delegate = _make_cm_delegate(base, method_name)
-                impl_chain_registry[(cls, method_name)] = [(delegate, "__default__", 0)]
+                mc.impl_chains[method_name] = [ImplChainEntry(func=delegate, source_module="__default__", seq=0)]
                 setattr(cls, method_name, classmethod(delegate))
                 declared_classmethods.add(method_name)
 
-            for method_name in getattr(base, DECLARED_STATICMETHODS, set[str]()):
-                if method_name in declared_staticmethods or (cls, method_name) in impl_chain_registry:
+            for method_name in base_meta.staticmethods:
+                if method_name in declared_staticmethods or method_name in mc.impl_chains:
                     continue
 
                 def _make_sm_delegate(b: type, mn: str):
@@ -288,13 +293,13 @@ class DeclarationMeta(type):
                     return delegate
 
                 delegate = _make_sm_delegate(base, method_name)
-                impl_chain_registry[(cls, method_name)] = [(delegate, "__default__", 0)]
+                mc.impl_chains[method_name] = [ImplChainEntry(func=delegate, source_module="__default__", seq=0)]
                 setattr(cls, method_name, staticmethod(delegate))
                 declared_staticmethods.add(method_name)
 
-        setattr(cls, DECLARED_METHODS, declared_methods)
-        setattr(cls, DECLARED_CLASSMETHODS, declared_classmethods)
-        setattr(cls, DECLARED_STATICMETHODS, declared_staticmethods)
+        mc.methods = declared_methods
+        mc.classmethods = declared_classmethods
+        mc.staticmethods = declared_staticmethods
 
         if existing is not None and existing is not cls:  # pyright: ignore[reportUnnecessaryComparison]
             update_class_inplace(existing, cls)
@@ -385,8 +390,8 @@ class DeclarationMeta(type):
         validate_field_descriptor(cls.__name__, new_desc)
         super().__setattr__(name, new_desc)
 
-        if from_base and cls in attribute_registry and name not in attribute_registry[cls]:  # pyright: ignore[reportUnnecessaryContains]
-            attribute_registry[cls][name] = desc.annotation
+        if from_base and name not in _decl_meta(cls).fields:  # pyright: ignore[reportUnnecessaryContains]
+            _decl_meta(cls).fields[name] = desc.annotation
         invalidate_ordered_fields_cache_for(cls)
 
 
@@ -394,14 +399,15 @@ class Declaration(metaclass=DeclarationMeta):
     """Base class for mutobj declarations."""
 
     # __weakref__：_implementation_instance_registry 是 WeakKeyDictionary，需要实例可弱引用。
-    # _mutobj_storage：存放所有字段值的内部 dict，替代原来的实例 __dict__。
-    # 使用单下划线而非双下划线：避免 Python name mangling 在跨类访问（AttributeDescriptor / 模块级函数）中失效。
-    __slots__ = ("__weakref__", "_mutobj_storage")
+    # __mutobj_storage__：存放所有字段值的内部 dict，替代原来的实例 __dict__。
+    __slots__ = ("__weakref__", "__mutobj_storage__")
+    __mutobj_storage__: dict[str, Any]
+    __mutobj_class_meta__: ClassVar[DeclarationClassMeta]
 
     def __new__(cls, *args: Any, **kwargs: Any) -> Self:
         obj = super().__new__(cls)
         # 字段值存储区；默认值不再热切预填，由 AttributeDescriptor._storage_get 首次访问时 lazy 求值。
-        obj._mutobj_storage = {}
+        obj.__mutobj_storage__ = {}
         return obj
 
     def __init__(self, *args: Any, **kwargs: Any) -> None:
@@ -430,4 +436,27 @@ class Declaration(metaclass=DeclarationMeta):
             setattr(self, attr_name, value)
 
     def __post_init__(self) -> None:
-        ...
+        pass
+
+
+def get_declaration_func(cls: type, method_name: str) -> Callable[..., Any] | None:
+    """Return the default (declaration-site) implementation of a method."""
+    for klass in cls.__mro__:
+        meta = getattr(klass, "__mutobj_class_meta__", None)
+        if meta is None:
+            continue
+        chain = meta.impl_chains.get(method_name)
+        if not chain:
+            continue
+        for entry in chain:
+            if entry.source_module == "__default__":
+                return entry.func
+    return None
+
+
+def get_declaration_doc(cls: type, method_name: str) -> str | None:
+    """Return the docstring of the declaration-site implementation of a method."""
+    func = get_declaration_func(cls, method_name)
+    if func is not None:
+        return getattr(func, "__doc__", None)
+    return None

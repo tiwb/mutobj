@@ -4,15 +4,6 @@ mutobj - Mutable Object Declaration
 支持将类拆分到多个文件中编写（声明与实现分离）
 """
 
-from .core._declaration import Declaration
-from .core._discovery import (
-    discover_subclasses,
-    get_declaration_doc,
-    get_declaration_func,
-    get_registry_generation,
-    resolve_class,
-)
-from .core._extensions import Extension, extension_types, extensions
 from .core._fields import (
     AttributeDescriptor,
     MISSING,
@@ -21,11 +12,26 @@ from .core._fields import (
     field_info,
     fields,
 )
+from .core._declaration import (
+    Declaration,
+    get_declaration_doc,
+    get_declaration_func,
+)
+from .core._extensions import (
+    Extension,
+    extension_types,
+    extensions,
+)
 from .core._implementation import (
     Implementation,
     implementation_class,
     implementation_of,
     implementation_owner,
+)
+from .core._discovery import (
+    discover_subclasses,
+    resolve_class,
+    get_registry_generation,
 )
 from .core._impls import (
     call_super_impl,

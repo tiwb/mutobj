@@ -1,7 +1,3 @@
-DECLARED_METHODS: str = "__mutobj_declared_methods__"
-DECLARED_CLASSMETHODS: str = "__mutobj_declared_classmethods__"
-DECLARED_STATICMETHODS: str = "__mutobj_declared_staticmethods__"
-
 MUTABLE_TYPES = (list, dict, set, bytearray)
 
 DECLARATION_CHAIN_HOOKS = frozenset({
@@ -17,6 +13,12 @@ MUTOBJ_RESERVED_DUNDERS = frozenset({
     "__subclasshook__",
     "__instancecheck__",
     "__subclasscheck__",
+})
+
+# 内部基础设施属性——不进 field 系统，不被 process_field_annotations 包装。
+MUTOBJ_INFRA_ATTRS = frozenset({
+    "__mutobj_storage__",
+    "target",
 })
 
 DECLARATION_USER_HOOKS = frozenset({

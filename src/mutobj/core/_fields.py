@@ -3,7 +3,6 @@ from __future__ import annotations
 from typing import Any, Callable, Mapping, TypeVar
 
 from ._constants import MUTABLE_TYPES
-from ._state import attribute_registry
 from ._typing_utils import is_classvar
 
 _F = TypeVar("_F")
@@ -136,12 +135,12 @@ class AttributeDescriptor:
         raise ValueError(f"Attribute '{self.name}' has no default")
 
     def _storage_get(self, obj: Any) -> Any:
-        # 字段值统一存放在 obj._mutobj_storage（dict），lazy 求值默认值：
+        # 字段值统一存放在 obj.__mutobj_storage__（dict），lazy 求值默认值：
         # - 已显式赋值：直接命中
         # - default_factory：首次访问求值并缓存（保证多次访问拿到同一对象）
         # - default（不可变）：每次返回 self.default，不写入 storage（节省内存）
         # - 无默认值：抛 AttributeError
-        storage: dict[str, Any] = obj._mutobj_storage
+        storage: dict[str, Any] = obj.__mutobj_storage__
         try:
             return storage[self.name]
         except KeyError:
@@ -156,7 +155,7 @@ class AttributeDescriptor:
             ) from None
 
     def _storage_set(self, obj: Any, value: Any) -> None:
-        obj._mutobj_storage[self.name] = value
+        obj.__mutobj_storage__[self.name] = value
 
     def restore_default_getter(self) -> None:
         self._fget = self._default_fget
@@ -186,7 +185,7 @@ class AttributeDescriptor:
 
     def __delete__(self, obj: Any) -> None:
         try:
-            del obj._mutobj_storage[self.name]
+            del obj.__mutobj_storage__[self.name]
         except KeyError as exc:
             raise AttributeError(
                 f"'{type(obj).__name__}' object has no attribute '{self.name}'"
@@ -223,14 +222,16 @@ def _get_ordered_fields(cls: type) -> list[str]:
     seen: set[str] = set()
     ordered: list[str] = []
     for klass in cls.__mro__[1:]:
-        if klass in attribute_registry:
-            for attr_name in attribute_registry[klass]:
+        meta = getattr(klass, "__mutobj_class_meta__", None)
+        if meta is not None:
+            for attr_name in meta.fields:
                 if attr_name not in seen:
                     seen.add(attr_name)
                     ordered.append(attr_name)
 
-    if cls in attribute_registry:
-        for attr_name in attribute_registry[cls]:
+    own_meta = getattr(cls, "__mutobj_class_meta__", None)
+    if own_meta is not None:
+        for attr_name in own_meta.fields:
             if attr_name not in seen:
                 seen.add(attr_name)
                 ordered.append(attr_name)
@@ -304,11 +305,11 @@ def validate_field_descriptor(owner_name: str, descriptor: AttributeDescriptor) 
 def get_missing_construction_fields(obj: Any) -> list[str]:
     """返回 obj 中所有「必填且尚未赋值」的字段名（按字段声明顺序）。
 
-    duck-typing 依赖 obj._mutobj_storage（dict[str, Any]）。供 Declaration /
+    duck-typing 依赖 obj.__mutobj_storage__（dict[str, Any]）。供 Declaration /
     Extension / Implementation 三处构造完成后的字段完整性检查共用。
     """
     missing: list[str] = []
-    storage: dict[str, Any] = obj._mutobj_storage
+    storage: dict[str, Any] = obj.__mutobj_storage__
     cls: type[Any] = obj.__class__
     for attr_name, desc in fields(cls).items():
         # has_default 的字段不需要出现在 storage（lazy default 不写入）；
@@ -324,8 +325,11 @@ def process_field_annotations(
     module: str,
     owner_cls: type,
     parent_classvars: set[str] | None = None,
+    skip: frozenset[str] = frozenset(),
 ) -> tuple[list[tuple[str, AttributeDescriptor]], set[str], list[tuple[str, Any]]]:
     """扫描本类 annotations，过滤 ClassVar，为每个字段创建 AttributeDescriptor。
+
+    skip: 内部基础设施属性名集合，不进 field 系统。
 
     返回:
         (field_descriptors, classvar_attrs, inherited_redeclared)
@@ -347,6 +351,8 @@ def process_field_annotations(
     owner_name = owner_cls.__name__
 
     for attr_name, attr_type in annotations.items():
+        if attr_name in skip:
+            continue
         if is_classvar(attr_type, module) or attr_name in parent_classvars:
             classvar_attrs.add(attr_name)
             value = namespace.get(attr_name)

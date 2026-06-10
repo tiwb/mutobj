@@ -15,8 +15,8 @@ class TestExtensionBasic:
         class UserExt(mutobj.Extension[User]):
             pass
 
-        # 验证 _target_class 被设置
-        assert UserExt._target_class is User
+        # 验证 target_class 被设置
+        assert UserExt.__mutobj_class_meta__.target_class is User
 
     def test_extension_get_or_create(self):
         """测试 Extension.get_or_create() 方法"""

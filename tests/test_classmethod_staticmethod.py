@@ -2,8 +2,6 @@
 
 import pytest
 import mutobj
-from mutobj.core._constants import DECLARED_CLASSMETHODS, DECLARED_STATICMETHODS
-
 
 class TestClassmethodDeclaration:
     """测试 classmethod 声明"""
@@ -16,7 +14,7 @@ class TestClassmethodDeclaration:
                 """创建实例"""
                 ...
 
-        declared = getattr(Factory, DECLARED_CLASSMETHODS, set())
+        declared = Factory.__mutobj_class_meta__.classmethods
         assert "create" in declared
 
     def test_default_classmethod_runs_without_error(self):
@@ -30,7 +28,6 @@ class TestClassmethodDeclaration:
         # 默认实现执行方法体（... 是表达式，函数隐式返回 None）
         result = Builder.build()
         assert result is None
-
 
 class TestClassmethodImplementation:
     """测试 classmethod 实现"""
@@ -70,7 +67,6 @@ class TestClassmethodImplementation:
         assert b.name == "test"
         assert type(b) is Base
 
-
 class TestStaticmethodDeclaration:
     """测试 staticmethod 声明"""
 
@@ -82,7 +78,7 @@ class TestStaticmethodDeclaration:
                 """辅助函数"""
                 ...
 
-        declared = getattr(Utils, DECLARED_STATICMETHODS, set())
+        declared = Utils.__mutobj_class_meta__.staticmethods
         assert "helper" in declared
 
     def test_default_staticmethod_runs_without_error(self):
@@ -96,7 +92,6 @@ class TestStaticmethodDeclaration:
         # 默认实现执行方法体（... 是表达式，函数隐式返回 None）
         result = Calculator.compute(1, 2)
         assert result is None
-
 
 class TestStaticmethodImplementation:
     """测试 staticmethod 实现"""
@@ -145,7 +140,6 @@ class TestStaticmethodImplementation:
         p = Parser()
         assert Parser.parse("a,b,c") == ["a", "b", "c"]
         assert p.parse("x,y") == ["x", "y"]
-
 
 class TestMixedMethods:
     """测试混合方法类型"""

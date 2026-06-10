@@ -1,13 +1,27 @@
 from __future__ import annotations
 
 import importlib
-from typing import Any, Callable, TypeVar
-
-from ._declaration import Declaration
-from ._state import class_registry, impl_chain_registry, get_registry_generation as _get_registry_generation
+from typing import TypeVar
 
 T = TypeVar("T")
 
+# ── 类注册表 ──────────────────────────────────────────────
+
+class_registry: dict[tuple[str, str], type] = {}
+
+registry_generation: int = 1
+
+
+def bump_registry_generation() -> None:
+    global registry_generation
+    registry_generation += 1
+
+
+def get_registry_generation() -> int:
+    return registry_generation
+
+
+# ── 注册表查询 ────────────────────────────────────────────
 
 def discover_subclasses(base_cls: type[T]) -> list[type[T]]:
     return [
@@ -17,7 +31,7 @@ def discover_subclasses(base_cls: type[T]) -> list[type[T]]:
     ]
 
 
-def resolve_class(class_path: str, base_cls: type[T] = Declaration) -> type[T]:
+def resolve_class(class_path: str, base_cls: type[T]) -> type[T]:
     for (module_name, qualname), cls in class_registry.items():
         if class_path in (qualname, cls.__name__, f"{module_name}.{qualname}"):
             if not issubclass(cls, base_cls):
@@ -43,25 +57,3 @@ def resolve_class(class_path: str, base_cls: type[T] = Declaration) -> type[T]:
             return cls
 
     raise ValueError(f"Cannot resolve class: {class_path}")
-
-
-def get_declaration_func(cls: type, method_name: str) -> Callable[..., Any] | None:
-    for klass in cls.__mro__:
-        chain = impl_chain_registry.get((klass, method_name))
-        if not chain:
-            continue
-        for func, source_module, _seq in chain:
-            if source_module == "__default__":
-                return func
-    return None
-
-
-def get_declaration_doc(cls: type, method_name: str) -> str | None:
-    func = get_declaration_func(cls, method_name)
-    if func is not None:
-        return getattr(func, "__doc__", None)
-    return None
-
-
-def get_registry_generation() -> int:
-    return _get_registry_generation()

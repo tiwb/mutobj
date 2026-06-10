@@ -5,7 +5,6 @@ import pytest
 import mutobj
 from mutobj import field
 from mutobj.core._fields import AttributeDescriptor, _ordered_fields_cache
-from mutobj.core._state import attribute_registry
 
 
 class _SetAttrBase(mutobj.Declaration):
@@ -90,11 +89,11 @@ class TestClassLevelAssignment:
             pass
 
         # 子类 registry 初始不含 x
-        child_reg = attribute_registry.get(Child, {})
+        child_reg = Child.__mutobj_class_meta__.fields
         assert "x" not in child_reg
 
         Child.x = 20
-        assert "x" in attribute_registry[Child]
+        assert "x" in Child.__mutobj_class_meta__.fields
 
     def test_ordered_fields_cache_invalidated(self):
         class P(mutobj.Declaration):

@@ -1,7 +1,7 @@
 """Tests for discover_subclasses and get_registry_generation."""
 
 import mutobj
-from mutobj.core._state import class_registry, impl_chain_registry
+from mutobj.core._discovery import class_registry
 
 
 class TestDiscoverSubclasses:

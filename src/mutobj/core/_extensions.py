@@ -1,21 +1,24 @@
 from __future__ import annotations
 
-import weakref
-from typing import TYPE_CHECKING, Any, Generic, Self, TypeVar
+from typing import TYPE_CHECKING, Any, ClassVar, Generic, Self, TypeVar, cast
 
+from ._classmeta import DeclarationClassMeta, ExtensionClassMeta
+from ._constants import MUTOBJ_INFRA_ATTRS
 from ._declaration import Declaration
 from ._fields import (
     format_field_names,
     get_missing_construction_fields,
     process_field_annotations,
 )
-from ._state import attribute_registry, bump_registry_generation
+from ._discovery import bump_registry_generation
 from ._typing_utils import is_classvar
 
 T = TypeVar("T", bound=Declaration)
 
-_extension_cache: weakref.WeakKeyDictionary[Declaration, dict[type, Any]] = weakref.WeakKeyDictionary()
-_extension_registry: dict[type, list[type["Extension[Any]"]]] = {}
+
+def _ext_meta(cls: type) -> ExtensionClassMeta:
+    """Get the ExtensionClassMeta for an Extension subclass."""
+    return cast(ExtensionClassMeta, getattr(cls, "__mutobj_class_meta__"))
 
 
 def _resolve_extension_target_class(cls: type) -> type | None:
@@ -76,7 +79,7 @@ class ExtensionMeta(type):
                     parent_classvars.add(base_attr)
 
         descriptors, _classvar_attrs, inherited_redeclared = process_field_annotations(
-            annotations, namespace, module, cls, parent_classvars,
+            annotations, namespace, module, cls, parent_classvars, skip=MUTOBJ_INFRA_ATTRS,
         )
         attr_registry: dict[str, Any] = {}
         for attr_name, descriptor in descriptors:
@@ -84,17 +87,20 @@ class ExtensionMeta(type):
             attr_registry[attr_name] = descriptor.annotation
         for attr_name, attr_type in inherited_redeclared:
             attr_registry[attr_name] = attr_type
-        # 登记到 attribute_registry，使 fields(cls) / get_missing_construction_fields
+        # 登记到 __mutobj_class_meta__.fields，使 fields(cls) / get_missing_construction_fields
         # 能看到 Extension 子类的字段。
         if attr_registry:
-            attribute_registry[cls] = attr_registry
+            cls.__mutobj_class_meta__ = ExtensionClassMeta(fields=attr_registry)  # type: ignore[reportAttributeAccessIssue]
             bump_registry_generation()
+        else:
+            cls.__mutobj_class_meta__ = ExtensionClassMeta()  # type: ignore[reportAttributeAccessIssue]
 
         # target_class 解析与注册。
         target_cls = _resolve_extension_target_class(cls)
         if target_cls is not None:
-            cls._target_class = target_cls  # pyright: ignore[reportAttributeAccessIssue]
-            _extension_registry.setdefault(target_cls, []).append(
+            _ext_meta(cls).target_class = target_cls  # pyright: ignore[reportAttributeAccessIssue]
+            target_cls.__mutobj_class_meta__.extensions.append(  # type: ignore[reportAttributeAccessIssue]
+
                 cls,  # pyright: ignore[reportArgumentType]
             )
 
@@ -102,14 +108,15 @@ class ExtensionMeta(type):
 
 
 class Extension(Generic[T], metaclass=ExtensionMeta):
-    # __slots__ 含 target 与 _mutobj_storage：禁止任意 setattr，字段统一进 storage。
-    # _target_class 是类属性（在 ExtensionMeta.__new__ 中按 Extension[T] 解析后赋值），
-    # 不能列入 __slots__——否则与同名类级默认值冲突，import 期 ValueError。
-    # target / _mutobj_storage 也不能在类体里赋默认值（同样冲突）。
-    # __weakref__ 不需要：_extension_cache 是 WeakKeyDictionary，弱引用的是 Declaration（key），
-    # ext 实例本身只被 cache 的 value dict 强引用，无须支持弱引用。
-    __slots__ = ("target", "_mutobj_storage")
-    _target_class: type | None = None
+    # __slots__ 含 target 与 __mutobj_storage__：禁止任意 setattr，字段统一进 storage。
+    # __mutobj_class_meta__ 是 per-class 元数据容器（在 ExtensionMeta.__new__ 中初始化，
+    # 其中 target_class 按 Extension[T] 解析后赋值）。
+    # target / __mutobj_storage__ 不能列入类体默认值（与 __slots__ 冲突）。
+    # __weakref__ 不需要：ext 实例被 decl.__mutobj_storage__["__extensions__"] 强引用，
+    # 随 decl 一起消亡，无须支持弱引用。
+    __slots__ = ("target", "__mutobj_storage__")
+    __mutobj_storage__: dict[str, Any]
+    __mutobj_class_meta__: ClassVar[ExtensionClassMeta]
 
     if TYPE_CHECKING:
         # 仅供类型检查器识别：run-time 不创建 annotation 默认值（避免与 __slots__ 冲突）。
@@ -117,15 +124,12 @@ class Extension(Generic[T], metaclass=ExtensionMeta):
 
     @classmethod
     def get_or_create(cls, instance: T) -> Self:
-        if instance not in _extension_cache:
-            _extension_cache[instance] = {}
-
-        cache = _extension_cache[instance]
+        cache: dict[type, Any] = instance.__mutobj_storage__.setdefault("__extensions__", {})
         if cls not in cache:
             ext = cls.__new__(cls)
             # 字段值存储区：与 Declaration 一致，由 AttributeDescriptor._storage_get 在
             # 首次访问时 lazy 求值默认值；显式赋值的字段直接进 storage。
-            ext._mutobj_storage = {}  # pyright: ignore[reportAttributeAccessIssue, reportPrivateUsage]
+            ext.__mutobj_storage__ = {}
             ext.target = instance
             ext.__init__()
             missing = get_missing_construction_fields(ext)
@@ -137,13 +141,13 @@ class Extension(Generic[T], metaclass=ExtensionMeta):
                 )
             cache[cls] = ext
 
-        return cache[cls]
+        return cast(Self, cache[cls])
 
     @classmethod
     def get(cls, instance: T) -> Self | None:
-        cache = _extension_cache.get(instance)
+        cache: dict[type, Any] | None = instance.__mutobj_storage__.get("__extensions__")
         if cache is not None:
-            return cache.get(cls)
+            return cast(Self, cache.get(cls))
         return None
 
     def __init__(self) -> None:
@@ -157,7 +161,10 @@ def extension_types(
     result: list[type[Extension[Any]]] = []
     seen: set[type] = set()
     for klass in decl_class.__mro__:
-        for ext_cls in _extension_registry.get(klass, []):
+        meta = getattr(klass, "__mutobj_class_meta__", None)
+        if meta is None:
+            continue
+        for ext_cls in cast(DeclarationClassMeta, meta).extensions:
             if ext_cls not in seen:
                 seen.add(ext_cls)
                 if filter_type is None or issubclass(ext_cls, filter_type):
@@ -169,7 +176,7 @@ def extensions(
     instance: Declaration,
     filter_type: type | None = None,
 ) -> list[Extension[Any]]:
-    cache = _extension_cache.get(instance)
+    cache: dict[type, Any] | None = instance.__mutobj_storage__.get("__extensions__")
     if cache is None:
         return []
     if filter_type is None:

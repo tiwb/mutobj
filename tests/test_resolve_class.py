@@ -5,7 +5,7 @@ import types
 
 import pytest
 import mutobj
-from mutobj.core._state import class_registry
+from mutobj.core._discovery import class_registry
 
 
 # 模块级 Declaration 子类，用于全路径测试
@@ -37,7 +37,7 @@ class TestResolveClassShortName:
         class MyProvider(mutobj.Declaration):
             def run(self) -> str: ...
 
-        result = mutobj.resolve_class("MyProvider")
+        result = mutobj.resolve_class("MyProvider", mutobj.Declaration)
         assert result is MyProvider
 
     def test_resolve_short_name_with_base_cls(self):
@@ -65,7 +65,7 @@ class TestResolveClassShortName:
     def test_resolve_nonexistent_short_name(self):
         """不存在的短名抛出 ValueError"""
         with pytest.raises(ValueError, match="Cannot resolve class"):
-            mutobj.resolve_class("NoSuchClassXYZ12345")
+            mutobj.resolve_class("NoSuchClassXYZ12345", mutobj.Declaration)
 
 
 class TestResolveClassFullPath:
@@ -75,7 +75,7 @@ class TestResolveClassFullPath:
         """已注册的模块级类可通过全路径解析"""
         mod = _TestAlreadyReg.__module__
         full_path = f"{mod}._TestAlreadyReg"
-        result = mutobj.resolve_class(full_path)
+        result = mutobj.resolve_class(full_path, mutobj.Declaration)
         assert result is _TestAlreadyReg
 
     def test_resolve_auto_import(self):
@@ -94,7 +94,7 @@ class AutoImported(mutobj.Declaration):
         sys.modules[mod_name] = mod
 
         try:
-            result = mutobj.resolve_class(f"{mod_name}.AutoImported")
+            result = mutobj.resolve_class(f"{mod_name}.AutoImported", mutobj.Declaration)
             assert result is mod.__dict__["AutoImported"]
         finally:
             sys.modules.pop(mod_name, None)
@@ -104,12 +104,12 @@ class AutoImported(mutobj.Declaration):
     def test_resolve_full_path_import_error(self):
         """import 失败时抛出 ValueError"""
         with pytest.raises(ValueError, match="Cannot import module"):
-            mutobj.resolve_class("no.such.module.FakeClass")
+            mutobj.resolve_class("no.such.module.FakeClass", mutobj.Declaration)
 
     def test_resolve_full_path_class_not_in_module(self):
         """模块存在但类不在其中时抛出 ValueError"""
         with pytest.raises(ValueError, match="Cannot resolve class"):
-            mutobj.resolve_class("os.path.NoSuchDeclaration")
+            mutobj.resolve_class("os.path.NoSuchDeclaration", mutobj.Declaration)
 
     def test_resolve_full_path_with_base_cls(self):
         """全路径 + base_cls 校验"""

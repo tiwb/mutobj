@@ -99,8 +99,7 @@ class TestReservedDunders:
 
         assert Child in called
         # 不应被注册为 declared method
-        from mutobj.core._state import impl_chain_registry
-        assert (Parent, "__init_subclass__") not in impl_chain_registry
+        assert "__init_subclass__" not in Parent.__mutobj_class_meta__.impl_chains
 
 
 class TestAmbiguousFallback:

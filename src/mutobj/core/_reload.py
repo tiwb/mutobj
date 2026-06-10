@@ -3,14 +3,8 @@ from __future__ import annotations
 from typing import Any, Callable
 
 from ._fields import AttributeDescriptor, invalidate_ordered_fields_cache_for
-from ._impls import apply_impl
-from ._state import (
-    attribute_registry,
-    class_registry,
-    classvar_registry,
-    impl_chain_registry,
-    module_first_seq,
-)
+from ._discovery import class_registry
+from ._impls import apply_impl, migrate_module_first_seq_for_class
 
 
 def update_class_inplace(existing: type, new_cls: type) -> None:
@@ -24,6 +18,7 @@ def update_class_inplace(existing: type, new_cls: type) -> None:
         "__name__",
         "__qualname__",
         "__module__",
+        "__mutobj_class_meta__",
     })
 
     old_attrs = set(existing.__dict__.keys())
@@ -60,42 +55,43 @@ def update_class_inplace(existing: type, new_cls: type) -> None:
 
 
 def migrate_registries(existing: type, new_cls: type) -> None:
-    for key in list(impl_chain_registry):
-        cls, impl_key = key
-        if cls is not new_cls:
-            continue
+    new_meta = getattr(new_cls, "__mutobj_class_meta__", None)
+    if new_meta is None:
+        return
 
-        new_chain = impl_chain_registry.pop(key)
-        existing_key = (existing, impl_key)
-        existing_chain = impl_chain_registry.get(existing_key, [])
+    existing_meta = getattr(existing, "__mutobj_class_meta__", None)
+    if existing_meta is not None:
+        # 合并 impl_chains
+        for impl_key, new_chain in new_meta.impl_chains.items():
+            existing_chain = existing_meta.impl_chains.get(impl_key, [])
+            new_default = next(
+                (entry for entry in new_chain if entry.source_module == "__default__"),
+                None,
+            )
 
-        new_default = next(
-            ((func, mod, seq) for func, mod, seq in new_chain if mod == "__default__"),
-            None,
-        )
+            if existing_chain:
+                for index, entry in enumerate(existing_chain):
+                    if entry.source_module == "__default__":
+                        if new_default is not None:
+                            existing_chain[index] = new_default
+                        break
+            else:
+                existing_chain = new_chain
 
-        if existing_chain:
-            for index, (_func, mod, _seq) in enumerate(existing_chain):
-                if mod == "__default__":
-                    if new_default is not None:
-                        existing_chain[index] = new_default
-                    break
-        else:
-            existing_chain = new_chain
+            existing_meta.impl_chains[impl_key] = existing_chain
+            if existing_chain:
+                apply_impl(existing, impl_key, existing_chain[-1].func)
 
-        impl_chain_registry[existing_key] = existing_chain
-        if existing_chain:
-            apply_impl(existing, impl_key, existing_chain[-1][0])
+        # 合并 fields
+        existing_meta.fields = new_meta.fields
+        existing_meta.classvars = new_meta.classvars
+        existing_meta.methods = new_meta.methods
+        existing_meta.classmethods = new_meta.classmethods
+        existing_meta.staticmethods = new_meta.staticmethods
+        existing_meta.impl_class = new_meta.impl_class
+        existing_meta.extensions = new_meta.extensions
 
-    keys_to_migrate = [key for key in module_first_seq if key[0] is new_cls]
-    for key in keys_to_migrate:
-        module_first_seq[(existing, key[1], key[2])] = module_first_seq.pop(key)
-
-    if new_cls in attribute_registry:
-        attribute_registry[existing] = attribute_registry.pop(new_cls)
-
-    if new_cls in classvar_registry:
-        classvar_registry[existing] = classvar_registry.pop(new_cls)
+    migrate_module_first_seq_for_class(new_cls, existing)
 
     invalidate_ordered_fields_cache_for(existing)
 

@@ -2,9 +2,8 @@
 
 import pytest
 import mutobj
-from mutobj.core._constants import DECLARED_METHODS
-from mutobj.core._state import attribute_registry, class_registry, impl_chain_registry
 
+from mutobj.core._discovery import class_registry
 
 def _exec_class(source: str, module_name: str = "test_virtual"):
     """Helper: exec source code that defines a class, simulating module re-execution."""
@@ -13,7 +12,6 @@ def _exec_class(source: str, module_name: str = "test_virtual"):
     globs = {"__name__": module_name, "mutobj": mutobj}
     exec(code, globs)
     return globs
-
 
 class TestInPlaceRedefinition:
 
@@ -44,7 +42,7 @@ class TestInPlaceRedefinition:
             "    def alpha(self) -> str: ...\n"
         )
         cls = g1["Svc"]
-        declared = getattr(cls, DECLARED_METHODS, set())
+        declared = cls.__mutobj_class_meta__.methods
         assert "alpha" in declared
 
         g2 = _exec_class(
@@ -54,7 +52,7 @@ class TestInPlaceRedefinition:
         cls2 = g2["Svc"]
         assert cls is cls2
 
-        declared2 = getattr(cls, DECLARED_METHODS, set())
+        declared2 = cls.__mutobj_class_meta__.methods
         assert "beta" in declared2
 
     def test_redefinition_removes_deleted_attrs(self):
@@ -163,8 +161,8 @@ class TestInPlaceRedefinition:
             "    def process(self) -> str: ...\n"
         )
         cls = g1["Migr"]
-        assert cls in attribute_registry
-        assert (cls, "process") in impl_chain_registry
+        assert hasattr(cls, "__mutobj_class_meta__")
+        assert "process" in cls.__mutobj_class_meta__.impl_chains
 
         # Redefine
         g2 = _exec_class(
@@ -177,5 +175,5 @@ class TestInPlaceRedefinition:
         assert cls is cls2
 
         # Registries should point to existing class
-        assert cls in attribute_registry
-        assert (cls, "process") in impl_chain_registry
+        assert hasattr(cls, "__mutobj_class_meta__")
+        assert "process" in cls.__mutobj_class_meta__.impl_chains

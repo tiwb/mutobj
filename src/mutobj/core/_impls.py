@@ -3,28 +3,46 @@ from __future__ import annotations
 import sys
 import warnings
 from types import FrameType
-from typing import Any, Callable, TypeVar
+from typing import Any, Callable, TypeVar, cast
 
+from ._classmeta import DeclarationClassMeta, ImplChainEntry
 from ._constants import (
     DECLARATION_USER_HOOKS,
-    DECLARED_CLASSMETHODS,
-    DECLARED_STATICMETHODS,
 )
 from ._fields import (
     AttributeDescriptor,
     AttributeGetterPlaceholder,
     AttributeSetterPlaceholder,
 )
-from ._state import (
+from ._discovery import (
     class_registry,
-    impl_chain_registry,
-    impl_metas,
-    module_first_seq,
     bump_registry_generation,
-    next_impl_seq,
 )
 
+impl_seq: int = 0
+module_first_seq: dict[tuple[type, str, str], int] = {}
+
+
+def next_impl_seq() -> int:
+    global impl_seq
+    impl_seq += 1
+    return impl_seq
+
+
+def migrate_module_first_seq_for_class(
+    old_cls: type, new_cls: type
+) -> None:
+    """Migrate module_first_seq keys from old_cls to new_cls (used by reload)."""
+    keys_to_migrate = [key for key in module_first_seq if key[0] is old_cls]
+    for key in keys_to_migrate:
+        module_first_seq[(new_cls, key[1], key[2])] = module_first_seq.pop(key)
+
 _F = TypeVar("_F")
+
+
+def _decl_meta(cls: type) -> DeclarationClassMeta:
+    """Get the DeclarationClassMeta for a Declaration subclass."""
+    return cast(DeclarationClassMeta, getattr(cls, "__mutobj_class_meta__"))
 
 
 def _make_stub_method(name: str, cls: type) -> Callable[..., Any]:
@@ -83,8 +101,8 @@ def apply_impl(cls: type, impl_key: str, func: Callable[..., Any]) -> None:
         if isinstance(desc, AttributeDescriptor):
             desc._fset = func  # pyright: ignore[reportPrivateUsage]
     else:
-        declared_cm: set[str] = getattr(cls, DECLARED_CLASSMETHODS, set())
-        declared_sm: set[str] = getattr(cls, DECLARED_STATICMETHODS, set())
+        declared_cm: set[str] = _decl_meta(cls).classmethods
+        declared_sm: set[str] = _decl_meta(cls).staticmethods
         if impl_key in declared_cm:
             setattr(cls, impl_key, classmethod(func))
         elif impl_key in declared_sm:
@@ -105,8 +123,8 @@ def _restore_stub(cls: type, impl_key: str) -> None:
         if isinstance(desc, AttributeDescriptor):
             desc.restore_default_setter()
     else:
-        declared_cm: set[str] = getattr(cls, DECLARED_CLASSMETHODS, set())
-        declared_sm: set[str] = getattr(cls, DECLARED_STATICMETHODS, set())
+        declared_cm: set[str] = _decl_meta(cls).classmethods
+        declared_sm: set[str] = _decl_meta(cls).staticmethods
         if impl_key in declared_cm:
             setattr(cls, impl_key, _make_stub_classmethod(impl_key, cls))
         elif impl_key in declared_sm:
@@ -122,18 +140,16 @@ def register_to_chain(
     source_module: str,
     metas: tuple[object, ...] = (),
 ) -> bool:
-    key = (target_cls, impl_key)
-    chain = impl_chain_registry.setdefault(key, [])
+    chain = _decl_meta(target_cls).impl_chains.setdefault(impl_key, [])
     seq_key = (target_cls, impl_key, source_module)
 
     existing_idx = next(
-        (i for i, (_, module_name, _) in enumerate(chain) if module_name == source_module),
+        (i for i, entry in enumerate(chain) if entry.source_module == source_module),
         None,
     )
     if existing_idx is not None:
-        old_seq = chain[existing_idx][2]
-        chain[existing_idx] = (func, source_module, old_seq)
-        _store_metas(target_cls, impl_key, old_seq, metas)
+        old_seq = chain[existing_idx].seq
+        chain[existing_idx] = ImplChainEntry(func=func, source_module=source_module, seq=old_seq, metas=metas)
         bump_registry_generation()
         return existing_idx == len(chain) - 1
 
@@ -143,11 +159,10 @@ def register_to_chain(
         seq = next_impl_seq()
         module_first_seq[seq_key] = seq
 
-    chain.append((func, source_module, seq))
-    chain.sort(key=lambda item: item[2])
-    _store_metas(target_cls, impl_key, seq, metas)
+    chain.append(ImplChainEntry(func=func, source_module=source_module, seq=seq, metas=metas))
+    chain.sort(key=lambda entry: entry.seq)
     bump_registry_generation()
-    return chain[-1][1] == source_module
+    return chain[-1].source_module == source_module
 
 
 def _resolve_source_key(func: Callable[..., Any]) -> str:
@@ -223,16 +238,6 @@ def _resolve_frame_source_key(frame: FrameType) -> str | None:
 
 def _source_matches_module(source_key: str, module_name: str) -> bool:
     return source_key == module_name or source_key.startswith(f"{module_name}::")
-
-
-def _store_metas(
-    target_cls: type, impl_key: str, seq: int, metas: tuple[object, ...]
-) -> None:
-    meta_key = (target_cls, impl_key, seq)
-    if metas:
-        impl_metas[meta_key] = metas
-    else:
-        impl_metas.pop(meta_key, None)
 
 
 def _resolve_impl_key(method: Any) -> tuple[type, str]:
@@ -326,34 +331,34 @@ def impl_has(method: Any) -> bool:
 
 def impl_has_override(method: Any) -> bool:
     cls, key = _resolve_impl_key(method)
-    chain = impl_chain_registry.get((cls, key), [])
-    return any(source_module != "__default__" for _func, source_module, _seq in chain)
+    chain = _decl_meta(cls).impl_chains.get(key, [])
+    return any(entry.source_module != "__default__" for entry in chain)
 
 
 def impl_is_own(method: Any) -> bool:
     cls, key = _resolve_impl_key(method)
-    chain = impl_chain_registry.get((cls, key), [])
+    chain = _decl_meta(cls).impl_chains.get(key, [])
     if not chain:
         return False
-    return not getattr(chain[0][0], "__mutobj_is_delegate__", False)
+    return not getattr(chain[0].func, "__mutobj_is_delegate__", False)
 
 
 def impl_is_inherited(method: Any) -> bool:
     cls, key = _resolve_impl_key(method)
-    chain = impl_chain_registry.get((cls, key), [])
+    chain = _decl_meta(cls).impl_chains.get(key, [])
     if not chain:
         return False
-    return bool(getattr(chain[0][0], "__mutobj_is_delegate__", False))
+    return bool(getattr(chain[0].func, "__mutobj_is_delegate__", False))
 
 
-def impl_chain(method: Any) -> list[tuple[Callable[..., Any], str, int]]:
+def impl_chain(method: Any) -> list[ImplChainEntry]:
     cls, key = _resolve_impl_key(method)
-    return list(impl_chain_registry.get((cls, key), []))
+    return list(_decl_meta(cls).impl_chains.get(key, []))
 
 
 def _resolve_chain_top_meta_key(
     target_cls: type, impl_key: str, _visited: set[tuple[type, str]] | None = None
-) -> tuple[type, str, int] | None:
+) -> ImplChainEntry | None:
     if _visited is None:
         _visited = set()
     pair = (target_cls, impl_key)
@@ -361,19 +366,19 @@ def _resolve_chain_top_meta_key(
         return None
     _visited.add(pair)
 
-    chain = impl_chain_registry.get(pair)
+    chain = _decl_meta(pair[0]).impl_chains.get(pair[1])
     if not chain:
         return None
 
-    top_func, _mod, seq = chain[-1]
-    if getattr(top_func, "__mutobj_is_delegate__", False):
-        base = getattr(top_func, "__mutobj_delegate_base__", None)
-        delegate_name = getattr(top_func, "__mutobj_delegate_name__", impl_key)
+    top = chain[-1]
+    if getattr(top.func, "__mutobj_is_delegate__", False):
+        base = getattr(top.func, "__mutobj_delegate_base__", None)
+        delegate_name = getattr(top.func, "__mutobj_delegate_name__", impl_key)
         if isinstance(base, type):
             resolved = _resolve_chain_top_meta_key(base, delegate_name, _visited)
             if resolved is not None:
                 return resolved
-    return (target_cls, impl_key, seq)
+    return top
 
 
 def impl_meta(method: Any) -> tuple[object, ...]:
@@ -381,7 +386,7 @@ def impl_meta(method: Any) -> tuple[object, ...]:
     resolved = _resolve_chain_top_meta_key(cls, key)
     if resolved is None:
         return ()
-    return impl_metas.get(resolved, ())
+    return resolved.metas
 
 
 def impl_meta_of(method: Any, meta_type: type[_F]) -> _F | None:
@@ -400,16 +405,16 @@ def impl_call_super(
     cls, key = _resolve_impl_key(method)
     frame = sys._getframe(_frame_depth)  # pyright: ignore[reportPrivateUsage]
     caller_module = _resolve_frame_source_key(frame) or frame.f_globals.get("__name__", "")
-    chain = impl_chain_registry.get((cls, key), [])
-    for index, (_fn, module_name, _seq) in enumerate(chain):
-        if module_name == caller_module:
+    chain = _decl_meta(cls).impl_chains.get(key, [])
+    for index, entry in enumerate(chain):
+        if entry.source_module == caller_module:
             if index == 0:
                 raise NotImplementedError(
                     f"No super implementation for {cls.__name__}.{key} "
-                    f"below module {module_name!r}"
+                    f"below module {caller_module!r}"
                 )
-            prev_func, _prev_module, _prev_seq = chain[index - 1]
-            return prev_func(*args, **kwargs)
+            prev_entry = chain[index - 1]
+            return prev_entry.func(*args, **kwargs)
     raise RuntimeError(
         f"impl_call_super({cls.__name__}.{key}) must be called from within "
         f"an @impl function for that method (caller module: {caller_module!r})"
@@ -497,30 +502,26 @@ def impl(
 def unregister_module_impls(module_name: str) -> int:
     removed = 0
 
-    for key in list(impl_chain_registry):
-        cls, impl_key = key
-        chain = impl_chain_registry[key]
-        was_top_module = _source_matches_module(chain[-1][1], module_name) if chain else False
-        removed_seqs = [
-            seq for _func, mod, seq in chain if _source_matches_module(mod, module_name)
-        ]
+    for cls in list(class_registry.values()):
+        meta = getattr(cls, "__mutobj_class_meta__", None)
+        if meta is None:
+            continue
+        for impl_key, chain in list(_decl_meta(cls).impl_chains.items()):
+            was_top_module = _source_matches_module(chain[-1].source_module, module_name) if chain else False
 
-        before = len(chain)
-        chain[:] = [
-            (func, mod, seq)
-            for func, mod, seq in chain
-            if not _source_matches_module(mod, module_name)
-        ]
-        removed += before - len(chain)
+            before = len(chain)
+            chain[:] = [
+                entry
+                for entry in chain
+                if not _source_matches_module(entry.source_module, module_name)
+            ]
+            removed += before - len(chain)
 
-        for seq in removed_seqs:
-            impl_metas.pop((cls, impl_key, seq), None)
-
-        if not chain:
-            _restore_stub(cls, impl_key)
-            del impl_chain_registry[key]
-        elif was_top_module:
-            apply_impl(cls, impl_key, chain[-1][0])
+            if not chain:
+                _restore_stub(cls, impl_key)
+                del _decl_meta(cls).impl_chains[impl_key]
+            elif was_top_module:
+                apply_impl(cls, impl_key, chain[-1].func)
 
     if removed > 0:
         bump_registry_generation()

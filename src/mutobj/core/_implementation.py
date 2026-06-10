@@ -1,20 +1,17 @@
 from __future__ import annotations
 
 import weakref
-from typing import Any, Generic, TypeVar, cast
+from typing import Any, ClassVar, Generic, TypeVar, cast
 
 from ._constants import (
     DECLARATION_CHAIN_HOOKS,
-    DECLARED_METHODS,
+    MUTOBJ_INFRA_ATTRS,
 )
+from ._classmeta import ImplementationClassMeta
 from ._declaration import Declaration
 from ._fields import get_attribute_descriptor, process_field_annotations
 from ._impls import apply_impl, register_to_chain
-from ._state import (
-    attribute_registry,
-    implementation_class_registry,
-    implementation_instance_registry,
-    implementation_owner_registry,
+from ._discovery import (
     bump_registry_generation,
 )
 from ._typing_utils import is_classvar
@@ -23,12 +20,19 @@ T = TypeVar("T", bound=Declaration)
 IT = TypeVar("IT", bound="Implementation[Any]")
 
 
+def _impl_meta(cls: type) -> ImplementationClassMeta:
+    """Get the ImplementationClassMeta for an Implementation subclass."""
+    return cast(ImplementationClassMeta, getattr(cls, "__mutobj_class_meta__"))
+
+
 def _implementation_source_key(impl_cls: type) -> str:
     return f"{impl_cls.__module__}::implementation::{impl_cls.__qualname__}"
 
 
-def _cleanup_implementation_owner(impl_id: int) -> None:
-    implementation_owner_registry.pop(impl_id, None)
+def _bind_implementation_instance(decl: Declaration, impl: Implementation[Any]) -> None:
+    """Bind an Implementation instance to a Declaration instance."""
+    decl.__mutobj_storage__["__impl__"] = impl
+    impl.__mutobj_storage__["__owner__"] = weakref.ref(decl)
 
 
 def _resolve_target_class(impl_cls: type) -> type[Declaration] | None:
@@ -53,50 +57,36 @@ def _resolve_target_class(impl_cls: type) -> type[Declaration] | None:
     return None
 
 
-def _bind_implementation_instance(decl: Declaration, impl: object) -> None:
-    previous_impl = implementation_instance_registry.get(decl)
-    if previous_impl is not None:
-        implementation_owner_registry.pop(id(previous_impl), None)
-
-    implementation_instance_registry[decl] = impl
-    implementation_owner_registry[id(impl)] = (
-        weakref.ref(decl),
-        weakref.finalize(decl, _cleanup_implementation_owner, id(impl)),
-    )
-
-
 def _lookup_implementation_class(
     decl_cls: type[Declaration],
 ) -> type["Implementation[Any]"] | None:
     for klass in decl_cls.__mro__:
-        impl_cls = implementation_class_registry.get(klass)
+        meta = getattr(klass, "__mutobj_class_meta__", None)
+        if meta is None:
+            continue
+        impl_cls = meta.impl_class
         if impl_cls is not None:
             return cast(type[Implementation[Any]], impl_cls)
     return None
 
 
 def _lookup_implementation_instance(decl: Declaration, impl_cls: type[IT]) -> IT | None:
-    impl = implementation_instance_registry.get(decl)
+    impl = decl.__mutobj_storage__.get("__impl__")
     if impl is None or not isinstance(impl, impl_cls):
         return None
     return impl
 
 
-def _lookup_implementation_owner(impl: object) -> Declaration | None:
-    entry = implementation_owner_registry.get(id(impl))
-    if entry is None:
+def _lookup_implementation_owner(impl: Implementation[Any]) -> Declaration | None:
+    try:
+        storage = impl.__mutobj_storage__
+    except AttributeError:
         return None
-    decl_ref, _finalizer = entry
-    decl = decl_ref()
-    if decl is None:
-        implementation_owner_registry.pop(id(impl), None)
-    return decl
+    owner_ref = storage.get("__owner__")
+    if owner_ref is None:
+        return None
+    return cast(weakref.ReferenceType[Declaration], owner_ref)()
 
-
-def _describe_value(value: object) -> str:
-    if isinstance(value, type):
-        return value.__name__
-    return f"{type(value).__name__} instance"
 
 
 def _implementation_bridge(
@@ -107,7 +97,7 @@ def _implementation_bridge(
     source_key: str,
 ) -> Any:
     def bridge(decl: Declaration, *args: Any, **kwargs: Any) -> Any:
-        impl = implementation_instance_registry.get(decl)
+        impl = decl.__mutobj_storage__.get("__impl__")
         if impl is None:
             raise RuntimeError(
                 f"Implementation instance for {target_cls.__name__} -> "
@@ -155,7 +145,7 @@ def _register_implementation_methods(
     target_cls: type[Declaration],
 ) -> None:
     source_key = _implementation_source_key(impl_cls)
-    declared_methods: set[str] = getattr(target_cls, DECLARED_METHODS, set())
+    declared_methods: set[str] = target_cls.__mutobj_class_meta__.methods
     bridged_methods = declared_methods | DECLARATION_CHAIN_HOOKS
 
     for method_name, method_value in impl_cls.__dict__.items():
@@ -230,7 +220,7 @@ def _register_implementation_class(
     impl_cls: type,
     target_cls: type[Declaration],
 ) -> None:
-    existing_impl = implementation_class_registry.get(target_cls)
+    existing_impl = target_cls.__mutobj_class_meta__.impl_class
     if existing_impl is not None and existing_impl is not impl_cls:
         if (
             existing_impl.__module__ != impl_cls.__module__
@@ -243,7 +233,10 @@ def _register_implementation_class(
 
     parent_impl: type | None = None
     for base in target_cls.__mro__[1:]:
-        parent_impl = implementation_class_registry.get(base)
+        base_meta = getattr(base, "__mutobj_class_meta__", None)
+        if base_meta is None:
+            continue
+        parent_impl = base_meta.impl_class
         if parent_impl is not None:
             break
     if parent_impl is not None and not issubclass(impl_cls, parent_impl):
@@ -252,31 +245,31 @@ def _register_implementation_class(
             f"because {target_cls.__name__} inherits its Declaration methods"
         )
 
-    impl_cls._target_class = target_cls
-    implementation_class_registry[target_cls] = impl_cls
+    _impl_meta(impl_cls).target_class = target_cls
+    target_cls.__mutobj_class_meta__.impl_class = impl_cls
     _register_implementation_methods(impl_cls, target_cls)
     bump_registry_generation()
 
 
 def prepare_implementation_instance(decl: Declaration) -> Any | None:
-    if decl in implementation_instance_registry:
-        return implementation_instance_registry[decl]
+    if "__impl__" in decl.__mutobj_storage__:
+        return decl.__mutobj_storage__["__impl__"]
 
     impl_cls = _lookup_implementation_class(type(decl))
     if impl_cls is None:
         return None
 
-    impl = cast(object, cast(Any, impl_cls).__new__(impl_cls))
+    impl = impl_cls.__new__(impl_cls)
     if not isinstance(impl, impl_cls):
         raise TypeError(
             f"{impl_cls.__name__}.__new__ returned {type(impl).__name__}, "
             f"expected {impl_cls.__name__}"
         )
-    # 始终初始化 _mutobj_storage：基类 __slots__ 保证了它的存在。
+    # 始终初始化 __mutobj_storage__：基类 __slots__ 保证了它的存在。
     # 声明字段赋值时 AttributeDescriptor 写入此处；未声明（有 __dict__ 时）走 __dict__。
-    impl._mutobj_storage = {}  # pyright: ignore[reportAttributeAccessIssue, reportPrivateUsage]
-    _bind_implementation_instance(decl, cast(object, impl))
-    return impl
+    impl.__mutobj_storage__ = {}
+    _bind_implementation_instance(decl, impl)
+    return impl  # pyright: ignore[reportUnknownVariableType]
 
 
 class ImplementationMeta(type):
@@ -288,7 +281,7 @@ class ImplementationMeta(type):
     3. 解析 ``Implementation[T]`` 的 T 并调 ``_register_implementation_class``。
 
     子类可显式 ``__slots__ = ("__dict__",)`` 附加 ``__dict__``：annotations 仍处理为
-    descriptor（声明字段走 ``_mutobj_storage``），未声明字段自然走 ``__dict__``。
+    descriptor（声明字段走 ``__mutobj_storage__``），未声明字段自然走 ``__dict__``。
     """
 
     def __new__(
@@ -326,7 +319,7 @@ class ImplementationMeta(type):
                     parent_classvars.add(base_attr)
 
         descriptors, _classvar_attrs, inherited_redeclared = process_field_annotations(
-            annotations, namespace, module, cls, parent_classvars,
+            annotations, namespace, module, cls, parent_classvars, skip=MUTOBJ_INFRA_ATTRS,
         )
         attr_registry: dict[str, Any] = {}
         for attr_name, descriptor in descriptors:
@@ -335,8 +328,10 @@ class ImplementationMeta(type):
         for attr_name, attr_type in inherited_redeclared:
             attr_registry[attr_name] = attr_type
         if attr_registry:
-            attribute_registry[cls] = attr_registry
+            cls.__mutobj_class_meta__ = ImplementationClassMeta(fields=attr_registry)  # type: ignore[reportAttributeAccessIssue]
             bump_registry_generation()
+        else:
+            cls.__mutobj_class_meta__ = ImplementationClassMeta()  # type: ignore[reportAttributeAccessIssue]
 
         # target_class 解析与注册（原 __init_subclass__ 逻辑平移）。
         target_cls = _resolve_target_class(cls)
@@ -347,48 +342,31 @@ class ImplementationMeta(type):
 
 
 class Implementation(Generic[T], metaclass=ImplementationMeta):
-    # 字段走 _mutobj_storage + descriptor。
+    # 字段走 __mutobj_storage__ + descriptor。
     # 子类可 __slots__ = ("__dict__",) 附加 __dict__：声明字段 → descriptor，未声明 → __dict__。
-    # _target_class 是类属性（_register_implementation_class 中赋值），
-    # 不能列入 __slots__——否则与同名类级默认值冲突，import 期 ValueError。
-    # __weakref__ 不需要：implementation_owner_registry 用 id(impl) 做 key、
-    # weakref.finalize 绑在 decl 上，impl 实例不需要支持弱引用。
-    __slots__ = ("_mutobj_storage",)
-    _target_class: type[T] | None = None
+    # __weakref__ 不需要：owner 信息通过 __mutobj_storage__ 上的 weakref 追溯 decl。
+    __slots__ = ("__mutobj_storage__",)
+    __mutobj_storage__: dict[str, Any]
+    __mutobj_class_meta__: ClassVar[ImplementationClassMeta]
 
 
 def implementation_class(
     decl_cls: type[T],
 ) -> type[Implementation[T]]:
-    if not isinstance(decl_cls, type) or not issubclass(decl_cls, Declaration):
-        raise TypeError(
-            "implementation_class() expects a mutobj.Declaration class, "
-            f"got {_describe_value(decl_cls)}"
-        )
-
     impl_cls = _lookup_implementation_class(decl_cls)
     if impl_cls is None:
         raise LookupError(
             f"No Implementation class is registered for {decl_cls.__name__}"
         )
-    return cast(type[Implementation[T]], impl_cls)
+    return cast(type[Implementation[T]], impl_cls)  # pyright: ignore[reportUnknownVariableType]
 
 
-def implementation_of(decl: T, impl_cls: type[IT]) -> IT:
-    if not isinstance(decl, Declaration):
-        raise TypeError(
-            "implementation_of() expects decl to be a mutobj.Declaration instance"
-        )
-    if not isinstance(impl_cls, type) or not issubclass(impl_cls, Implementation):
-        raise TypeError(
-            "implementation_of() expects impl_cls to be an Implementation subclass"
-        )
-
+def implementation_of(decl: Declaration, impl_cls: type[IT]) -> IT:
     impl = _lookup_implementation_instance(decl, impl_cls)
     if impl is not None:
         return impl
 
-    actual_impl = implementation_instance_registry.get(decl)
+    actual_impl = decl.__mutobj_storage__.get("__impl__")
     if actual_impl is None:
         raise LookupError(
             f"No {impl_cls.__name__} instance is associated with "
@@ -401,11 +379,6 @@ def implementation_of(decl: T, impl_cls: type[IT]) -> IT:
 
 
 def implementation_owner(impl: Implementation[T]) -> T:
-    if not isinstance(impl, Implementation):
-        raise TypeError(
-            "implementation_owner() expects impl to be an Implementation instance"
-        )
-
     owner = _lookup_implementation_owner(impl)
     if owner is None:
         raise LookupError(

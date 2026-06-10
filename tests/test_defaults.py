@@ -5,7 +5,6 @@ import pytest
 import mutobj
 from mutobj import field
 from mutobj.core._fields import AttributeDescriptor, MISSING
-from mutobj.core._state import attribute_registry
 
 
 # ── 基本默认值 ──────────────────────────────────────────────────
@@ -481,7 +480,7 @@ class TestUnannotatedOverride:
         class Child(Base):
             val = 99
 
-        assert "val" in attribute_registry[Child]
+        assert "val" in Child.__mutobj_class_meta__.fields
 
     def test_unannotated_override_with_impl(self):
         """无注解覆盖属性在 @impl 方法中可正确访问"""

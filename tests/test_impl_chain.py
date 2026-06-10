@@ -3,8 +3,7 @@
 import pytest
 import mutobj
 from mutobj import unregister_module_impls
-from mutobj.core._state import impl_chain_registry, module_first_seq
-
+from mutobj.core._impls import module_first_seq
 
 def _exec_class(source: str, module_name: str = "test_virtual"):
     """Helper: exec source code that defines a class, simulating module re-execution."""
@@ -13,7 +12,6 @@ def _exec_class(source: str, module_name: str = "test_virtual"):
     globs = {"__name__": module_name, "mutobj": mutobj}
     exec(code, globs)
     return globs
-
 
 class TestOverrideChainBasic:
     """覆盖链基本测试"""
@@ -90,7 +88,6 @@ class TestOverrideChainBasic:
         """卸载不存在的模块 → 无操作"""
         count = unregister_module_impls("nonexistent_chain_module_xyz")
         assert count == 0
-
 
 class TestOverrideChainReload:
     """覆盖链 reload 测试"""
@@ -193,7 +190,6 @@ class TestOverrideChainReload:
         unregister_module_impls("chain6_mod_c")
         assert s.run() == "B_v2"
 
-
 class TestDeclarationReloadWithChain:
     """Declaration 类 reload 与覆盖链的交互"""
 
@@ -290,7 +286,6 @@ class TestDeclarationReloadWithChain:
         # 默认实现更新为新函数
         assert obj.work() == "default_v2"
 
-
 class TestOverrideChainProperty:
     """覆盖链 property 测试"""
 
@@ -352,7 +347,6 @@ class TestOverrideChainProperty:
         obj.value = "test"
         assert obj.value == "A:test"
 
-
 class TestOverrideChainClassmethodStaticmethod:
     """覆盖链 classmethod/staticmethod 测试"""
 
@@ -402,7 +396,6 @@ class TestOverrideChainClassmethodStaticmethod:
         unregister_module_impls("sm_chain_mod_b")
         assert SmSvc.helper() == "A"
 
-
 class TestDefaultImplVariants:
     """测试不同方法体形式的默认实现"""
 
@@ -442,14 +435,13 @@ class TestDefaultImplVariants:
 
     def test_all_body_types_are_declared(self):
         """所有方法体形式都被识别为声明方法"""
-        from mutobj.core._constants import DECLARED_METHODS
-
+        
         class D4(mutobj.Declaration):
             def m1(self) -> str: ...
             def m2(self) -> None: pass
             def m3(self) -> str: return "hello"
 
-        declared = getattr(D4, DECLARED_METHODS, set())
+        declared = D4.__mutobj_class_meta__.methods
         assert "m1" in declared
         assert "m2" in declared
         assert "m3" in declared
