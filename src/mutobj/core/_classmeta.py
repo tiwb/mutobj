@@ -32,7 +32,7 @@ class MutobjClassMeta:
 class ExtensionClassMeta(MutobjClassMeta):
     """Per-class metadata for Extension subclasses."""
 
-    target_class: type[Declaration] | None = None
+    extension_base: type[Declaration] | None = None
 
 
 @dataclass(slots=True)

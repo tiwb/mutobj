@@ -2,7 +2,6 @@
 
 import pytest
 import mutobj
-from mutobj.core._classmeta import ext_meta_cache
 
 
 class TestExtensionBasic:
@@ -16,8 +15,7 @@ class TestExtensionBasic:
         class UserExt(mutobj.Extension[User]):
             pass
 
-        # 验证 target_class 被设置
-        assert ext_meta_cache[UserExt].target_class is User
+        assert mutobj.extension_base(UserExt) is User
 
     def test_extension_get_or_create(self):
         """测试 Extension.get_or_create() 方法"""

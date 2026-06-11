@@ -16,7 +16,7 @@ from ._typing_utils import is_classvar
 T = TypeVar("T", bound=Declaration)
 
 
-def _resolve_extension_target_class(cls: type) -> type[Declaration] | None:
+def _resolve_extension_base(cls: type) -> type[Declaration] | None:
     """从 Extension 子类的 __orig_bases__ 中解析 Extension[T] 的 T。"""
     # 延迟绑定——Extension 基类本身进入 ExtensionMeta.__new__ 时 Extension 还未赋值。
     extension_cls = globals().get("Extension")
@@ -96,11 +96,11 @@ class ExtensionMeta(type):
             ext_meta_cache[cls] = mc
             mutobj_meta_cache[cls] = mc
 
-        # target_class 解析与注册。
-        target_cls = _resolve_extension_target_class(cls)
-        if target_cls is not None:
-            mc.target_class = target_cls
-            decl_meta_cache[target_cls].extensions.append(
+        # extension_base 解析与注册。
+        base_cls = _resolve_extension_base(cls)
+        if base_cls is not None:
+            mc.extension_base = base_cls
+            decl_meta_cache[base_cls].extensions.append(
                 cast(type[Extension[Any]], cls),
             )
 
@@ -176,3 +176,15 @@ def extensions(
     if filter_type is None:
         return list(cache.values())
     return [ext for ext in cache.values() if isinstance(ext, filter_type)]
+
+
+def extension_base(ext_cls: type[Extension[Any]]) -> type[Declaration] | None:
+    """返回 Extension 类型绑定的 Declaration 基类。
+
+    从 ``Extension[T]`` 语法中解析 T，支持协变——
+    返回的基类在语义上包含其所有子类。
+    """
+    meta = ext_meta_cache.get(ext_cls)
+    if meta is None:
+        return None
+    return meta.extension_base

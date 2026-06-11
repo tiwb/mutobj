@@ -1,12 +1,10 @@
 from __future__ import annotations
 
-from typing import Any, Callable, Mapping, TypeVar, cast
+from typing import Any, Callable, Generic, Mapping, TypeVar, cast
 
 from ._classmeta import MutobjClassMeta, mutobj_meta_cache
 from ._constants import MUTABLE_TYPES
 from ._typing_utils import is_classvar
-
-_F = TypeVar("_F")
 
 
 class _MissingSentinel:
@@ -50,7 +48,10 @@ def field(
     return FieldSpec(default=default, default_factory=default_factory, init=init)
 
 
-class FieldInfo:
+_F = TypeVar("_F")
+
+
+class FieldInfo(Generic[_F]):
     """Public introspection handle for a declaration field.
 
     Returned by :func:`field_info` and :func:`fields`.  Provides a stable
@@ -78,7 +79,7 @@ class FieldInfo:
     def has_default(self) -> bool:
         return self._desc.has_default
 
-    def make_default(self) -> Any:
+    def make_default(self) -> _F:
         if self._desc.default_factory is not None:
             return self._desc.default_factory()
         if self._desc.default is not MISSING:
@@ -144,7 +145,7 @@ class AttributeDescriptor:
         self.owner_cls = owner_cls
         self.has_storage = has_storage
         self.readonly = readonly
-        self.field_info = FieldInfo(self)
+        self.field_info: FieldInfo[Any] = FieldInfo[Any](self)
         if has_storage:
             self.fget = STORAGE
             self.fset = None if readonly else STORAGE
@@ -243,29 +244,36 @@ def get_ordered_descriptors(cls: type, mc: MutobjClassMeta) -> dict[str, Attribu
 
 
 
-def field_default(field: _F, /) -> _F:
-    if not isinstance(field, FieldInfo):
-        raise TypeError(
-            f"field_default(field) expects a class-level field token (e.g. Cls.field_name), "
-            f"got {type(field).__name__!r}. Use mutobj.fields(cls)[name].make_default() "
-            f"for dynamic field-name access."
-        )
-    return field.make_default()
+def field_info(field: _F, /) -> FieldInfo[_F]:
+    """将类级字段 token 包装为 FieldInfo，供 pyright 推断字段值类型。
 
+    用法::
 
-def field_info(field: object, /) -> FieldInfo:
+        info = mutobj.field_info(Action.categories)
+        cats = info.make_default()  # pyright 推断为 tuple[str, ...]
+        _ = info.has_default
+
+    与 :func:`fields` 的对比：
+    - ``field_info(Cls.field)``：静态字段名，pyright 可推断字段值类型
+    - ``fields(cls)["name"]``：动态字段名遍历，返回 ``FieldInfo[Any]``
+    """
     if not isinstance(field, FieldInfo):
         raise TypeError(
             f"field_info(field) expects a class-level field token (e.g. Cls.field_name), "
-            f"got {type(field).__name__!r}."
+            f"got {type(field).__name__!r}. Use mutobj.fields(cls)[name] "
+            f"for dynamic field-name access."
         )
-    return field
+    return cast(FieldInfo[_F], field)
 
 
-def fields(cls: type, /) -> Mapping[str, FieldInfo]:
+def fields(cls: type, /) -> Mapping[str, FieldInfo[Any]]:
     mc = mutobj_meta_cache.get(cls)
     if mc is not None:
-        return {name: desc.field_info for name, desc in get_ordered_descriptors(cls, mc).items()}
+        result: dict[str, FieldInfo[Any]] = {
+            name: desc.field_info
+            for name, desc in get_ordered_descriptors(cls, mc).items()
+        }
+        return result
     return {}
 
 

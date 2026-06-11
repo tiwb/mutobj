@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import sys
-import warnings
+from dataclasses import dataclass
 from types import FrameType
 from typing import Any, Callable, TypeVar, cast
 
@@ -22,6 +22,14 @@ from ._discovery import (
 
 impl_seq: int = 0
 module_first_seq: dict[tuple[type, str, str], int] = {}
+
+
+@dataclass(frozen=True, slots=True)
+class ImplChainInfo:
+    """``impl_chain()`` 返回的链条目，公开 API。"""
+
+    func: Callable[..., Any]
+    source_module: str
 
 
 def next_impl_seq() -> int:
@@ -316,17 +324,6 @@ def _resolve_impl_key(method: Any) -> tuple[type, str]:
     return target_cls, method_name
 
 
-def impl_has(method: Any) -> bool:
-    warnings.warn(
-        "mutobj.impl_has() is deprecated; use mutobj.impl_has_override() / "
-        "mutobj.impl_is_own() / mutobj.impl_is_inherited() instead. "
-        "The old bytecode-based 'real implementation' detection has been removed.",
-        DeprecationWarning,
-        stacklevel=2,
-    )
-    return impl_has_override(method)
-
-
 def impl_has_override(method: Any) -> bool:
     cls, key = _resolve_impl_key(method)
     chain = decl_meta_cache[cls].impl_chains.get(key, [])
@@ -349,9 +346,12 @@ def impl_is_inherited(method: Any) -> bool:
     return bool(getattr(chain[0].func, "__mutobj_is_delegate__", False))
 
 
-def impl_chain(method: Any) -> list[ImplChainEntry]:
+def impl_chain(method: Any) -> list[ImplChainInfo]:
     cls, key = _resolve_impl_key(method)
-    return list(decl_meta_cache[cls].impl_chains.get(key, []))
+    return [
+        ImplChainInfo(func=e.func, source_module=e.source_module)
+        for e in decl_meta_cache[cls].impl_chains.get(key, [])
+    ]
 
 
 def _resolve_chain_top_meta_key(
@@ -417,16 +417,6 @@ def impl_call_super(
         f"impl_call_super({cls.__name__}.{key}) must be called from within "
         f"an @impl function for that method (caller module: {caller_module!r})"
     )
-
-
-def call_super_impl(method: Any, *args: Any, **kwargs: Any) -> Any:
-    warnings.warn(
-        "mutobj.call_super_impl() is deprecated; use mutobj.impl_call_super() instead.",
-        DeprecationWarning,
-        stacklevel=2,
-    )
-    return impl_call_super(method, *args, _frame_depth=2, **kwargs)
-
 
 def impl(
     method: Callable[..., Any] | AttributeGetterPlaceholder | AttributeSetterPlaceholder,
@@ -497,7 +487,7 @@ def impl(
     return decorator
 
 
-def unregister_module_impls(module_name: str) -> int:
+def impl_unregister(module_name: str) -> int:
     removed = 0
 
     for cls in list(class_registry.values()):
@@ -525,7 +515,3 @@ def unregister_module_impls(module_name: str) -> int:
         bump_registry_generation()
 
     return removed
-
-
-def register_module_impls(*modules: Any) -> None:
-    return None
