@@ -2,7 +2,8 @@ from __future__ import annotations
 
 from typing import Any, Callable, cast
 
-from ._fields import AttributeDescriptor, invalidate_ordered_fields_cache_for
+from ._classmeta import decl_meta_cache
+from ._fields import AttributeDescriptor
 from ._discovery import class_registry
 from ._impls import apply_impl, migrate_module_first_seq_for_class
 
@@ -18,7 +19,6 @@ def update_class_inplace(existing: type, new_cls: type) -> None:
         "__name__",
         "__qualname__",
         "__module__",
-        "__mutobj_class_meta__",
     })
 
     old_attrs = set(existing.__dict__.keys())
@@ -55,11 +55,11 @@ def update_class_inplace(existing: type, new_cls: type) -> None:
 
 
 def migrate_registries(existing: type, new_cls: type) -> None:
-    new_meta = getattr(new_cls, "__mutobj_class_meta__", None)
+    new_meta = decl_meta_cache.get(new_cls)
     if new_meta is None:
         return
 
-    existing_meta = getattr(existing, "__mutobj_class_meta__", None)
+    existing_meta = decl_meta_cache.get(existing)
     if existing_meta is not None:
         # 合并 impl_chains
         for impl_key, new_chain in new_meta.impl_chains.items():
@@ -90,10 +90,9 @@ def migrate_registries(existing: type, new_cls: type) -> None:
         existing_meta.staticmethods = new_meta.staticmethods
         existing_meta.impl_class = new_meta.impl_class
         existing_meta.extensions = new_meta.extensions
+        existing_meta.ordered_descriptors = None
 
     migrate_module_first_seq_for_class(new_cls, existing)
-
-    invalidate_ordered_fields_cache_for(existing)
 
     key = (new_cls.__module__, new_cls.__qualname__)
     if class_registry.get(key) is new_cls:

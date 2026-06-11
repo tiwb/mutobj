@@ -2,6 +2,7 @@
 
 import pytest
 import mutobj
+from mutobj.core._classmeta import decl_meta_cache
 from mutobj import unregister_module_impls
 
 
@@ -16,8 +17,8 @@ class TestImplSourceTracking:
             return "ok"
 
         key = (Svc, "run")
-        assert key[1] in key[0].__mutobj_class_meta__.impl_chains
-        chain = key[0].__mutobj_class_meta__.impl_chains[key[1]]
+        assert key[1] in decl_meta_cache[key[0]].impl_chains
+        chain = decl_meta_cache[key[0]].impl_chains[key[1]]
         # 链中应有来源为当前模块的条目
         modules = [entry.source_module for entry in chain if entry.source_module != "__default__"]
         assert __name__ in modules
@@ -35,7 +36,7 @@ class TestImplSourceTracking:
             return "v2"
 
         key = (Svc2, "run")
-        chain = key[0].__mutobj_class_meta__.impl_chains[key[1]]
+        chain = decl_meta_cache[key[0]].impl_chains[key[1]]
         # 同模块就地替换，链中应有 __default__ + 当前模块条目
         modules = [entry.source_module for entry in chain]
         assert "__default__" in modules
@@ -168,13 +169,13 @@ class TestUnregisterModuleImpls:
             return "working"
 
         key = (G, "work")
-        chain = key[0].__mutobj_class_meta__.impl_chains[key[1]]
+        chain = decl_meta_cache[key[0]].impl_chains[key[1]]
         assert any(entry.source_module == __name__ for entry in chain)
 
         unregister_module_impls(__name__)
 
         # 外部模块条目应被移除，仅剩 __default__
-        assert all(entry.source_module == "__default__" for entry in key[0].__mutobj_class_meta__.impl_chains.get(key[1], []))
+        assert all(entry.source_module == "__default__" for entry in decl_meta_cache[key[0]].impl_chains.get(key[1], []))
 
     def test_unregister_nonexistent_module_is_noop(self):
         count = unregister_module_impls("nonexistent.module.xyz")
@@ -189,12 +190,12 @@ class TestUnregisterModuleImpls:
             return "processed"
 
         key = (H, "proc")
-        assert key[1] in key[0].__mutobj_class_meta__.impl_chains
+        assert key[1] in decl_meta_cache[key[0]].impl_chains
 
         unregister_module_impls(__name__)
 
         # 链仍存在（含 __default__ 条目）
-        assert key[1] in key[0].__mutobj_class_meta__.impl_chains
-        chain = key[0].__mutobj_class_meta__.impl_chains[key[1]]
+        assert key[1] in decl_meta_cache[key[0]].impl_chains
+        chain = decl_meta_cache[key[0]].impl_chains[key[1]]
         assert len(chain) == 1
         assert chain[0].source_module == "__default__"

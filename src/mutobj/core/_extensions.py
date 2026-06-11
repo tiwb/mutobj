@@ -1,24 +1,19 @@
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Any, ClassVar, Generic, Self, TypeVar, cast
+from typing import TYPE_CHECKING, Any, Generic, Self, TypeVar, cast
 
-from ._classmeta import DeclarationClassMeta, ExtensionClassMeta
+from ._classmeta import ExtensionClassMeta, decl_meta_cache, ext_meta_cache, mutobj_meta_cache
 from ._constants import MUTOBJ_INFRA_ATTRS
 from ._declaration import Declaration
 from ._fields import (
-    format_field_names,
-    get_missing_construction_fields,
+    get_ordered_descriptors,
     process_field_annotations,
+    validate_construction_fields,
 )
 from ._discovery import bump_registry_generation
 from ._typing_utils import is_classvar
 
 T = TypeVar("T", bound=Declaration)
-
-
-def _ext_meta(cls: type) -> ExtensionClassMeta:
-    """Get the ExtensionClassMeta for an Extension subclass."""
-    return cast(ExtensionClassMeta, getattr(cls, "__mutobj_class_meta__"))
 
 
 def _resolve_extension_target_class(cls: type) -> type[Declaration] | None:
@@ -84,24 +79,29 @@ class ExtensionMeta(type):
         attr_registry: dict[str, Any] = {}
         for attr_name, descriptor in descriptors:
             type.__setattr__(cls, attr_name, descriptor)
-            attr_registry[attr_name] = descriptor.annotation
-        for attr_name, attr_type in inherited_redeclared:
-            attr_registry[attr_name] = attr_type
-        # 登记到 __mutobj_class_meta__.fields，使 fields(cls) / get_missing_construction_fields
+            attr_registry[attr_name] = descriptor
+        for desc in inherited_redeclared:
+            type.__setattr__(cls, desc.name, desc)
+            attr_registry[desc.name] = desc
+        # 登记到 ext_meta_cache，使 fields(cls) / validate_construction_fields
         # 能看到 Extension 子类的字段。
         if attr_registry:
-            cast(Any, cls).__mutobj_class_meta__ = ExtensionClassMeta(fields=attr_registry)
+            mc = ExtensionClassMeta(fields=attr_registry)
+            ext_meta_cache[cls] = mc
+            mutobj_meta_cache[cls] = mc
+            get_ordered_descriptors(cls, mc)
             bump_registry_generation()
         else:
-            cast(Any, cls).__mutobj_class_meta__ = ExtensionClassMeta()
+            mc = ExtensionClassMeta()
+            ext_meta_cache[cls] = mc
+            mutobj_meta_cache[cls] = mc
 
         # target_class 解析与注册。
         target_cls = _resolve_extension_target_class(cls)
         if target_cls is not None:
-            _ext_meta(cls).target_class = target_cls
-            target_cls.__mutobj_class_meta__.extensions.append(
-
-                cls,
+            mc.target_class = target_cls
+            decl_meta_cache[target_cls].extensions.append(
+                cast(type[Extension[Any]], cls),
             )
 
         return cls
@@ -109,14 +109,11 @@ class ExtensionMeta(type):
 
 class Extension(Generic[T], metaclass=ExtensionMeta):
     # __slots__ 含 target 与 __mutobj_storage__：禁止任意 setattr，字段统一进 storage。
-    # __mutobj_class_meta__ 是 per-class 元数据容器（在 ExtensionMeta.__new__ 中初始化，
-    # 其中 target_class 按 Extension[T] 解析后赋值）。
     # target / __mutobj_storage__ 不能列入类体默认值（与 __slots__ 冲突）。
     # __weakref__ 不需要：ext 实例被 decl.__mutobj_storage__["__extensions__"] 强引用，
     # 随 decl 一起消亡，无须支持弱引用。
     __slots__ = ("target", "__mutobj_storage__")
     __mutobj_storage__: dict[str, Any]
-    __mutobj_class_meta__: ClassVar[ExtensionClassMeta]
 
     if TYPE_CHECKING:
         # 仅供类型检查器识别：run-time 不创建 annotation 默认值（避免与 __slots__ 冲突）。
@@ -127,18 +124,15 @@ class Extension(Generic[T], metaclass=ExtensionMeta):
         cache: dict[type, Any] = instance.__mutobj_storage__.setdefault("__extensions__", {})
         if cls not in cache:
             ext = cls.__new__(cls)
-            # 字段值存储区：与 Declaration 一致，由 AttributeDescriptor._storage_get 在
+            # 字段值存储区：与 Declaration 一致，由 AttributeDescriptor.__get__ 在
             # 首次访问时 lazy 求值默认值；显式赋值的字段直接进 storage。
             ext.__mutobj_storage__ = {}
             ext.target = instance
             ext.__init__()
-            missing = get_missing_construction_fields(ext)
-            if missing:
-                raise TypeError(
-                    f"{cls.__name__} missing field(s) after construction: "
-                    f"{format_field_names(missing)}. Either provide default/default_factory "
-                    f"or assign in __init__."
-                )
+            validate_construction_fields(
+                ext, cls.__name__,
+                hint="Either provide default/default_factory or assign in __init__."
+            )
             cache[cls] = ext
 
         return cast(Self, cache[cls])
@@ -161,10 +155,10 @@ def extension_types(
     result: list[type[Extension[Any]]] = []
     seen: set[type] = set()
     for klass in decl_class.__mro__:
-        meta = getattr(klass, "__mutobj_class_meta__", None)
+        meta = decl_meta_cache.get(klass)
         if meta is None:
             continue
-        for ext_cls in cast(DeclarationClassMeta, meta).extensions:
+        for ext_cls in meta.extensions:
             if ext_cls not in seen:
                 seen.add(ext_cls)
                 if filter_type is None or issubclass(ext_cls, filter_type):

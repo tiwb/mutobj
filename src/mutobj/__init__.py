@@ -5,7 +5,7 @@ mutobj - Mutable Object Declaration
 """
 
 from .core._fields import (
-    AttributeDescriptor,
+    FieldInfo,
     MISSING,
     field,
     field_default,
@@ -65,7 +65,7 @@ __all__ = [
     "impl_meta_of",
     "field",
     "MISSING",
-    "AttributeDescriptor",
+    "FieldInfo",
     "register_module_impls",
     "unregister_module_impls",
     "discover_subclasses",

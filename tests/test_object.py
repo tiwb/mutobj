@@ -2,6 +2,7 @@
 
 import pytest
 import mutobj
+from mutobj.core._classmeta import decl_meta_cache
 
 
 class TestDeclarationDeclaration:
@@ -14,9 +15,8 @@ class TestDeclarationDeclaration:
             age: int
 
         # 验证属性已注册
-        assert hasattr(User, "__mutobj_class_meta__")
-        assert "name" in User.__mutobj_class_meta__.fields
-        assert "age" in User.__mutobj_class_meta__.fields
+        assert "name" in decl_meta_cache[User].fields
+        assert "age" in decl_meta_cache[User].fields
 
     def test_attribute_access(self):
         """测试属性访问"""
@@ -48,7 +48,7 @@ class TestDeclarationDeclaration:
                 ...
 
         # 验证方法被识别为声明
-        declared = Calculator.__mutobj_class_meta__.methods
+        declared = decl_meta_cache[Calculator].methods
         assert "add" in declared
 
     def test_stub_method_with_pass(self):
@@ -57,7 +57,7 @@ class TestDeclarationDeclaration:
             def process(self) -> None:
                 pass
 
-        declared = Service.__mutobj_class_meta__.methods
+        declared = decl_meta_cache[Service].methods
         assert "process" in declared
 
     def test_default_impl_runs_without_error(self):

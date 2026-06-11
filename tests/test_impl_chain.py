@@ -2,6 +2,7 @@
 
 import pytest
 import mutobj
+from mutobj.core._classmeta import decl_meta_cache
 from mutobj import unregister_module_impls
 from mutobj.core._impls import module_first_seq
 
@@ -441,7 +442,7 @@ class TestDefaultImplVariants:
             def m2(self) -> None: pass
             def m3(self) -> str: return "hello"
 
-        declared = D4.__mutobj_class_meta__.methods
+        declared = decl_meta_cache[D4].methods
         assert "m1" in declared
         assert "m2" in declared
         assert "m3" in declared

@@ -1,8 +1,8 @@
 from __future__ import annotations
 
-from typing import Any, Callable, ClassVar, Self, TypeVar, cast
+from typing import Any, Callable, Self, TypeVar, cast
 
-from ._classmeta import DeclarationClassMeta, ImplChainEntry
+from ._classmeta import DeclarationClassMeta, ImplChainEntry, decl_meta_cache, mutobj_meta_cache
 from ._constants import (
     DECLARATION_CHAIN_HOOKS,
     MUTABLE_TYPES,
@@ -10,14 +10,11 @@ from ._constants import (
 )
 from ._fields import (
     AttributeDescriptor,
-    Field,
-    format_field_names,
-    get_attribute_descriptor,
-    get_init_fields,
-    get_missing_construction_fields,
-    invalidate_ordered_fields_cache_for,
+    FieldSpec,
+    get_ordered_descriptors,
     process_field_annotations,
     validate_field_descriptor,
+    validate_construction_fields,
 )
 from ._reload import migrate_registries, update_class_inplace
 from ._discovery import (
@@ -28,11 +25,6 @@ from ._typing_utils import is_classvar
 
 
 T = TypeVar("T", bound="Declaration")
-
-
-def _decl_meta(cls: type) -> DeclarationClassMeta:
-    """Get the DeclarationClassMeta for a Declaration subclass."""
-    return cast(DeclarationClassMeta, getattr(cls, "__mutobj_class_meta__"))
 
 
 def _property_return_annotation(prop: property) -> Any:
@@ -66,24 +58,28 @@ class DeclarationMeta(type):
         cls = super().__new__(mcs, name, bases, namespace)
 
         if name == "Declaration" and not bases:
-            cls.__mutobj_class_meta__ = DeclarationClassMeta()
+            mc = DeclarationClassMeta()
+            decl_meta_cache[cls] = mc
+            mutobj_meta_cache[cls] = mc
             for hook_name in DECLARATION_CHAIN_HOOKS:
                 hook = namespace.get(hook_name)
                 if callable(hook):
                     hook.__mutobj_class__ = cls
-                    _decl_meta(cls).impl_chains.setdefault(hook_name, []).append(ImplChainEntry(func=hook, source_module="__default__", seq=0))
-                    _decl_meta(cls).methods.add(hook_name)
+                    mc.impl_chains.setdefault(hook_name, []).append(ImplChainEntry(func=hook, source_module="__default__", seq=0))
+                    mc.methods.add(hook_name)
             return cls
 
         annotations = getattr(cls, "__annotations__", {})
 
         # 初始化 per-class 元数据容器
-        cls.__mutobj_class_meta__ = DeclarationClassMeta()
+        mc = DeclarationClassMeta()
+        decl_meta_cache[cls] = mc
+        mutobj_meta_cache[cls] = mc
 
         parent_classvars: set[str] = set()
         module = namespace.get("__module__", "")
         for base in cls.__mro__[1:]:
-            base_meta = getattr(base, "__mutobj_class_meta__", None)
+            base_meta = decl_meta_cache.get(base)
             if base_meta is not None:
                 parent_classvars.update(base_meta.classvars)
             base_anns = getattr(base, "__annotations__", {})
@@ -99,11 +95,13 @@ class DeclarationMeta(type):
         attr_registry: dict[str, Any] = {}
         for attr_name, descriptor in descriptors:
             setattr(cls, attr_name, descriptor)
-            attr_registry[attr_name] = descriptor.annotation
+            attr_registry[attr_name] = descriptor
         # 父类已有描述符、本类仅重复声明 annotation 的字段：
-        # 记入本类 registry 以保持字段顺序（与原逻辑一致）。
-        for attr_name, attr_type in inherited_redeclared:
-            attr_registry[attr_name] = attr_type
+        # 记入本类 registry。descriptor 已是 process_field_annotations 内部
+        # 基于父类描述符创建的拷贝（owner_cls=cls），直接挂载即可。
+        for desc in inherited_redeclared:
+            setattr(cls, desc.name, desc)
+            attr_registry[desc.name] = desc
 
         own_annotations = getattr(cls, "__annotations__", {})
         for attr_name, value in namespace.items():
@@ -111,7 +109,7 @@ class DeclarationMeta(type):
                 continue
             if attr_name in parent_classvars:
                 classvar_attrs.add(attr_name)
-                if isinstance(value, Field):
+                if isinstance(value, FieldSpec):
                     raise TypeError(
                         f"Declaration '{name}' attribute '{attr_name}' is ClassVar "
                         f"and does not support field(default_factory=...). "
@@ -132,7 +130,7 @@ class DeclarationMeta(type):
             if parent_desc is None:
                 continue
 
-            if isinstance(value, Field):
+            if isinstance(value, FieldSpec):
                 descriptor = AttributeDescriptor(
                     attr_name,
                     parent_desc.annotation,
@@ -157,12 +155,10 @@ class DeclarationMeta(type):
                 )
             validate_field_descriptor(name, descriptor)
             setattr(cls, attr_name, descriptor)
-            attr_registry[attr_name] = parent_desc.annotation
+            attr_registry[attr_name] = descriptor
 
-        _decl_meta(cls).fields = attr_registry
-        _decl_meta(cls).classvars = classvar_attrs
-
-        mc = _decl_meta(cls)
+        mc.fields = attr_registry
+        mc.classvars = classvar_attrs
 
         for prop_name, prop_value in namespace.items():
             if prop_name in MUTOBJ_RESERVED_DUNDERS:
@@ -220,7 +216,7 @@ class DeclarationMeta(type):
         for base in cls.__mro__[1:]:
             if base is object:
                 continue
-            base_meta = getattr(base, "__mutobj_class_meta__", None)
+            base_meta = decl_meta_cache.get(base)
             if base_meta is None:
                 continue
 
@@ -324,22 +320,16 @@ class DeclarationMeta(type):
             impl = prepare_implementation_instance(obj)
             cls.__init__(obj, *args, **kwargs)
             obj.__post_init__()
-            missing_fields = get_missing_construction_fields(obj)
-            if missing_fields:
-                raise TypeError(
-                    f"{type(obj).__name__} missing field(s) after construction: "
-                    f"{format_field_names(missing_fields)}. Either pass them to __init__ "
-                    f"or assign in __post_init__."
-                )
+            validate_construction_fields(
+                obj, type(obj).__name__,
+                hint="Either pass them to __init__ or assign in __post_init__."
+            )
             # Implementation 字段完整性检查：与 Declaration 对标。
             if impl is not None:
-                missing_impl_fields = get_missing_construction_fields(impl)
-                if missing_impl_fields:
-                    raise TypeError(
-                        f"{type(impl).__name__} missing field(s) after construction: "
-                        f"{format_field_names(missing_impl_fields)}. Either pass them "
-                        f"through to Implementation.__init__ or provide default/default_factory."
-                    )
+                validate_construction_fields(
+                    impl, type(impl).__name__,
+                    hint="Either pass them through to Implementation.__init__ or provide default/default_factory."
+                )
         return obj
 
     def __setattr__(cls, name: str, value: Any) -> None:
@@ -372,7 +362,7 @@ class DeclarationMeta(type):
                 f"value {type_name}. "
                 f"Use field(default_factory={type_name}) instead."
             )
-        if isinstance(value, Field):
+        if isinstance(value, FieldSpec):
             new_desc = AttributeDescriptor(
                 name,
                 desc.annotation,
@@ -395,9 +385,11 @@ class DeclarationMeta(type):
         validate_field_descriptor(cls.__name__, new_desc)
         super().__setattr__(name, new_desc)
 
-        if from_base and name not in _decl_meta(cls).fields:
-            _decl_meta(cls).fields[name] = desc.annotation
-        invalidate_ordered_fields_cache_for(cls)
+        mc = decl_meta_cache.get(cls)
+        if mc is not None:
+            if from_base and name not in mc.fields:
+                mc.fields[name] = new_desc
+            mc.ordered_descriptors = None
 
 
 class Declaration(metaclass=DeclarationMeta):
@@ -407,7 +399,6 @@ class Declaration(metaclass=DeclarationMeta):
     # __mutobj_storage__：存放所有字段值的内部 dict，替代原来的实例 __dict__。
     __slots__ = ("__weakref__", "__mutobj_storage__")
     __mutobj_storage__: dict[str, Any]
-    __mutobj_class_meta__: ClassVar[DeclarationClassMeta]
 
     def __new__(cls, *args: Any, **kwargs: Any) -> Self:
         obj = super().__new__(cls)
@@ -416,8 +407,14 @@ class Declaration(metaclass=DeclarationMeta):
         return obj
 
     def __init__(self, *args: Any, **kwargs: Any) -> None:
+        if not args and not kwargs:
+            return
+
+        mc = decl_meta_cache[type(self)]
+        descriptors = get_ordered_descriptors(type(self), mc)
+
         if args:
-            init_fields = get_init_fields(type(self))
+            init_fields = [name for name, d in descriptors.items() if d.init]
             if len(args) > len(init_fields):
                 raise TypeError(
                     f"{type(self).__name__}() takes {len(init_fields)} positional "
@@ -433,8 +430,8 @@ class Declaration(metaclass=DeclarationMeta):
                 kwargs[name] = value
 
         for attr_name, value in kwargs.items():
-            desc = get_attribute_descriptor(type(self), attr_name)
-            if isinstance(desc, AttributeDescriptor) and not desc.init:
+            desc = descriptors.get(attr_name)
+            if desc is not None and not desc.init:
                 raise TypeError(
                     f"{type(self).__name__}() got an unexpected keyword argument '{attr_name}'"
                 )
@@ -447,7 +444,7 @@ class Declaration(metaclass=DeclarationMeta):
 def get_declaration_func(cls: type, method_name: str) -> Callable[..., Any] | None:
     """Return the default (declaration-site) implementation of a method."""
     for klass in cls.__mro__:
-        meta = getattr(klass, "__mutobj_class_meta__", None)
+        meta = decl_meta_cache.get(klass)
         if meta is None:
             continue
         chain = meta.impl_chains.get(method_name)

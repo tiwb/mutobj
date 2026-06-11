@@ -17,8 +17,10 @@ class TestPropertyDeclaration:
                 """显示名称"""
                 ...
 
+        from mutobj.core._fields import AttributeDescriptor
+
         desc = User.__dict__["display_name"]
-        assert isinstance(desc, mutobj.AttributeDescriptor)
+        assert isinstance(desc, AttributeDescriptor)
         assert desc.has_storage is False
         assert desc.readonly is True
         assert list(mutobj.fields(User).keys()) == ["name"]

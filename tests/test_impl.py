@@ -2,6 +2,7 @@
 
 import pytest
 import mutobj
+from mutobj.core._classmeta import decl_meta_cache
 
 
 class TestImplDecorator:
@@ -34,8 +35,8 @@ class TestImplDecorator:
             return 42
 
         key = (Counter, "count")
-        assert key[1] in key[0].__mutobj_class_meta__.impl_chains
-        chain = key[0].__mutobj_class_meta__.impl_chains[key[1]]
+        assert key[1] in decl_meta_cache[key[0]].impl_chains
+        chain = decl_meta_cache[key[0]].impl_chains[key[1]]
         # 链中应有默认实现和外部实现
         assert len(chain) >= 2
         # 链顶应为外部实现

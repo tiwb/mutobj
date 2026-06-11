@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from typing import Any, Callable, Mapping, TypeVar, cast
 
+from ._classmeta import MutobjClassMeta, mutobj_meta_cache
 from ._constants import MUTABLE_TYPES
 from ._typing_utils import is_classvar
 
@@ -11,25 +12,19 @@ _F = TypeVar("_F")
 class _MissingSentinel:
     """Default-value sentinel used to distinguish unset from None."""
 
-    _instance: _MissingSentinel | None = None
-
-    def __new__(cls) -> _MissingSentinel:
-        if cls._instance is None:
-            cls._instance = super().__new__(cls)
-        return cls._instance
-
     def __repr__(self) -> str:
         return "MISSING"
-
-    def __bool__(self) -> bool:
-        return False
 
 
 MISSING: Any = _MissingSentinel()
 
+_UNSET: Any = object()
 
-class Field:
-    """Attribute default-value descriptor, created by field()."""
+STORAGE: Any = object()
+
+
+class FieldSpec:
+    """Transient field specification created by field(), consumed by the metaclass."""
 
     __slots__ = ("default", "default_factory", "init")
 
@@ -52,7 +47,62 @@ def field(
     default_factory: Callable[[], Any] | None = None,
     init: bool = True,
 ) -> Any:
-    return Field(default=default, default_factory=default_factory, init=init)
+    return FieldSpec(default=default, default_factory=default_factory, init=init)
+
+
+class FieldInfo:
+    """Public introspection handle for a declaration field.
+
+    Returned by :func:`field_info` and :func:`fields`.  Provides a stable
+    read-only view on a field's metadata regardless of internal refactoring.
+    """
+
+    __slots__ = ("_desc",)
+
+    def __init__(self, desc: "AttributeDescriptor") -> None:
+        self._desc = desc
+
+    @property
+    def name(self) -> str:
+        return self._desc.name
+
+    @property
+    def annotation(self) -> Any:
+        return self._desc.annotation
+
+    @property
+    def init(self) -> bool:
+        return self._desc.init
+
+    @property
+    def has_default(self) -> bool:
+        return self._desc.has_default
+
+    def make_default(self) -> Any:
+        if self._desc.default_factory is not None:
+            return self._desc.default_factory()
+        if self._desc.default is not MISSING:
+            return self._desc.default
+        raise ValueError(f"Attribute '{self._desc.name}' has no default")
+
+    @property
+    def getter(self) -> "AttributeGetterPlaceholder":
+        return AttributeGetterPlaceholder(self._desc)
+
+    @property
+    def setter(self) -> "AttributeSetterPlaceholder":
+        return AttributeSetterPlaceholder(self._desc)
+
+    def __repr__(self) -> str:
+        return f"FieldInfo(name={self.name!r})"
+
+    def __eq__(self, other: object) -> bool:
+        if isinstance(other, FieldInfo):
+            return self._desc is other._desc
+        return NotImplemented
+
+    def __hash__(self) -> int:
+        return hash(self._desc)
 
 
 class AttributeDescriptor:
@@ -66,11 +116,10 @@ class AttributeDescriptor:
         "init",
         "owner_cls",
         "readonly",
-        "_has_storage",
-        "_fget",
-        "_fset",
-        "_default_fget",
-        "_default_fset",
+        "has_storage",
+        "fget",
+        "fset",
+        "field_info",
     )
 
     def __init__(
@@ -93,57 +142,35 @@ class AttributeDescriptor:
         self.default_factory = default_factory
         self.init = init
         self.owner_cls = owner_cls
-        self._has_storage = has_storage
+        self.has_storage = has_storage
         self.readonly = readonly
+        self.field_info = FieldInfo(self)
         if has_storage:
-            self._default_fget = self._storage_get
-            self._default_fset = None if readonly else self._storage_set
+            self.fget = STORAGE
+            self.fset = None if readonly else STORAGE
         else:
-            self._default_fget = fget
-            self._default_fset = fset
-        self._fget = self._default_fget
-        self._fset = self._default_fset
+            self.fget = fget
+            self.fset = fset
 
     @property
     def has_default(self) -> bool:
         return self.default is not MISSING or self.default_factory is not None
 
-    @property
-    def has_storage(self) -> bool:
-        return self._has_storage
-
-    @property
-    def getter(self) -> "AttributeGetterPlaceholder":
-        return AttributeGetterPlaceholder(self)
-
-    @property
-    def setter(self) -> "AttributeSetterPlaceholder":
-        return AttributeSetterPlaceholder(self)
-
-    def get_default(self) -> Any:
-        if self.default is not MISSING:
-            return self.default
-        if self.default_factory is not None:
-            return self.default_factory
-        raise ValueError(f"Attribute '{self.name}' has no default")
-
-    def make_default(self) -> Any:
-        if self.default_factory is not None:
-            return self.default_factory()
-        if self.default is not MISSING:
-            return self.default
-        raise ValueError(f"Attribute '{self.name}' has no default")
-
-    def _storage_get(self, obj: Any) -> Any:
-        # 字段值统一存放在 obj.__mutobj_storage__（dict），lazy 求值默认值：
-        # - 已显式赋值：直接命中
-        # - default_factory：首次访问求值并缓存（保证多次访问拿到同一对象）
-        # - default（不可变）：每次返回 self.default，不写入 storage（节省内存）
-        # - 无默认值：抛 AttributeError
-        storage: dict[str, Any] = obj.__mutobj_storage__
-        try:
-            return storage[self.name]
-        except KeyError:
+    def __get__(self, obj: Any, objtype: type | None = None) -> Any:
+        if obj is None:
+            return self.field_info
+        if self.fget is STORAGE:
+            # 字段值统一存放在 obj.__mutobj_storage__（dict），lazy 求值默认值：
+            # - 已显式赋值：直接命中
+            # - default_factory：首次访问求值并缓存（保证多次访问拿到同一对象）
+            # - default：每次返回 self.default，不写入 storage（节省内存）
+            # - 无默认值：抛 AttributeError
+            # 用 storage.get + is 判断替代 try/except KeyError，避免默认值字段
+            # 每次访问都触发异常栈开销。
+            storage: dict[str, Any] = obj.__mutobj_storage__
+            value = storage.get(self.name, _UNSET)
+            if value is not _UNSET:
+                return value
             if self.default_factory is not None:
                 value = self.default_factory()
                 storage[self.name] = value
@@ -153,35 +180,26 @@ class AttributeDescriptor:
             raise AttributeError(
                 f"'{type(obj).__name__}' object has no attribute '{self.name}'"
             ) from None
-
-    def _storage_set(self, obj: Any, value: Any) -> None:
-        obj.__mutobj_storage__[self.name] = value
-
-    def restore_default_getter(self) -> None:
-        self._fget = self._default_fget
-
-    def restore_default_setter(self) -> None:
-        self._fset = self._default_fset
-
-    def __get__(self, obj: Any, objtype: type | None = None) -> Any:
-        if obj is None:
-            return self
-        if self._fget is None:
+        if self.fget is None:
             owner_name = self.owner_cls.__name__ if self.owner_cls is not None else "<unknown>"
             raise NotImplementedError(
                 f"Property '{self.name}' getter is not implemented. "
                 f"Use @mutobj.impl({owner_name}.{self.name}.getter) to provide implementation."
             )
-        return self._fget(obj)
+        return self.fget(obj)
 
     def __set__(self, obj: Any, value: Any) -> None:
-        if self._fset is None:
+        fset = self.fset
+        if fset is STORAGE:
+            obj.__mutobj_storage__[self.name] = value
+            return
+        if fset is None:
             owner_name = self.owner_cls.__name__ if self.owner_cls is not None else "<unknown>"
             raise AttributeError(
                 f"Property '{self.name}' is read-only or setter is not implemented. "
                 f"Use @mutobj.impl({owner_name}.{self.name}.setter) to provide implementation."
             )
-        self._fset(obj, value)
+        fset(obj, value)
 
     def __delete__(self, obj: Any) -> None:
         try:
@@ -202,62 +220,31 @@ class AttributeSetterPlaceholder:
         self.descriptor = descriptor
 
 
-_ordered_fields_cache: dict[type, list[str]] = {}
-
-
-def invalidate_ordered_fields_cache_for(cls: type) -> None:
-    for cached_cls in list(_ordered_fields_cache):
-        try:
-            if issubclass(cached_cls, cls):
-                _ordered_fields_cache.pop(cached_cls, None)
-        except TypeError:
-            _ordered_fields_cache.pop(cached_cls, None)
-
-
-def _get_ordered_fields(cls: type) -> list[str]:
-    cached = _ordered_fields_cache.get(cls)
-    if cached is not None:
-        return cached
-
-    seen: set[str] = set()
-    ordered: list[str] = []
+def _compute_ordered(cls: type, mc: MutobjClassMeta) -> dict[str, AttributeDescriptor]:
+    ordered: dict[str, AttributeDescriptor] = {}
     for klass in cls.__mro__[1:]:
-        meta = getattr(klass, "__mutobj_class_meta__", None)
-        if meta is not None:
-            for attr_name in meta.fields:
-                if attr_name not in seen:
-                    seen.add(attr_name)
-                    ordered.append(attr_name)
-
-    own_meta = getattr(cls, "__mutobj_class_meta__", None)
-    if own_meta is not None:
-        for attr_name in own_meta.fields:
-            if attr_name not in seen:
-                seen.add(attr_name)
-                ordered.append(attr_name)
-
-    _ordered_fields_cache[cls] = ordered
+        bm = mutobj_meta_cache.get(klass)
+        if bm is not None:
+            for name, desc in bm.fields.items():
+                if name not in ordered:
+                    ordered[name] = desc
+    for name, desc in mc.fields.items():
+        ordered[name] = desc
     return ordered
 
 
-def get_attribute_descriptor(cls: type, attr_name: str) -> AttributeDescriptor | None:
-    for klass in cls.__mro__:
-        desc = klass.__dict__.get(attr_name)
-        if isinstance(desc, AttributeDescriptor):
-            return desc
-    return None
+def get_ordered_descriptors(cls: type, mc: MutobjClassMeta) -> dict[str, AttributeDescriptor]:
+    """获取 ordered_descriptors，如已失效则重新计算并缓存。"""
+    ordered = mc.ordered_descriptors
+    if ordered is None:
+        ordered = _compute_ordered(cls, mc)
+        mc.ordered_descriptors = ordered
+    return ordered
 
-
-def get_init_fields(cls: type) -> list[str]:
-    return [
-        attr_name
-        for attr_name in _get_ordered_fields(cls)
-        if (desc := get_attribute_descriptor(cls, attr_name)) is not None and desc.init
-    ]
 
 
 def field_default(field: _F, /) -> _F:
-    if not isinstance(field, AttributeDescriptor):
+    if not isinstance(field, FieldInfo):
         raise TypeError(
             f"field_default(field) expects a class-level field token (e.g. Cls.field_name), "
             f"got {type(field).__name__!r}. Use mutobj.fields(cls)[name].make_default() "
@@ -266,8 +253,8 @@ def field_default(field: _F, /) -> _F:
     return field.make_default()
 
 
-def field_info(field: object, /) -> AttributeDescriptor:
-    if not isinstance(field, AttributeDescriptor):
+def field_info(field: object, /) -> FieldInfo:
+    if not isinstance(field, FieldInfo):
         raise TypeError(
             f"field_info(field) expects a class-level field token (e.g. Cls.field_name), "
             f"got {type(field).__name__!r}."
@@ -275,16 +262,14 @@ def field_info(field: object, /) -> AttributeDescriptor:
     return field
 
 
-def fields(cls: type, /) -> Mapping[str, AttributeDescriptor]:
-    result: dict[str, AttributeDescriptor] = {}
-    for name in _get_ordered_fields(cls):
-        desc = get_attribute_descriptor(cls, name)
-        if desc is not None:
-            result[name] = desc
-    return result
+def fields(cls: type, /) -> Mapping[str, FieldInfo]:
+    mc = mutobj_meta_cache.get(cls)
+    if mc is not None:
+        return {name: desc.field_info for name, desc in get_ordered_descriptors(cls, mc).items()}
+    return {}
 
 
-def format_field_names(field_names: list[str]) -> str:
+def _format_field_names(field_names: list[str]) -> str:
     """将字段名列表格式化为 "'a', 'b', 'c'" 形式，用于错误信息。"""
     return ", ".join(f"'{name}'" for name in field_names)
 
@@ -302,8 +287,8 @@ def validate_field_descriptor(owner_name: str, descriptor: AttributeDescriptor) 
         )
 
 
-def get_missing_construction_fields(obj: Any) -> list[str]:
-    """返回 obj 中所有「必填且尚未赋值」的字段名（按字段声明顺序）。
+def validate_construction_fields(obj: Any, owner_label: str, *, hint: str) -> None:
+    """校验构造完成后必填字段是否全部已赋值，缺失则抛出 TypeError。
 
     duck-typing 依赖 obj.__mutobj_storage__（dict[str, Any]）。供 Declaration /
     Extension / Implementation 三处构造完成后的字段完整性检查共用。
@@ -311,12 +296,16 @@ def get_missing_construction_fields(obj: Any) -> list[str]:
     missing: list[str] = []
     storage: dict[str, Any] = obj.__mutobj_storage__
     cls: type[Any] = obj.__class__
-    for attr_name, desc in fields(cls).items():
-        # has_default 的字段不需要出现在 storage（lazy default 不写入）；
-        # 只有必填字段（无默认值且 has_storage）才需检查是否被赋值。
-        if desc.has_storage and not desc.has_default and desc.name not in storage:
-            missing.append(attr_name)
-    return missing
+    mc = mutobj_meta_cache.get(cls)
+    if mc is not None:
+        for name, desc in get_ordered_descriptors(cls, mc).items():
+            if desc.has_storage and not desc.has_default and storage.get(desc.name, _UNSET) is _UNSET:
+                missing.append(name)
+    if missing:
+        raise TypeError(
+            f"{owner_label} missing field(s) after construction: "
+            f"{_format_field_names(missing)}. {hint}"
+        )
 
 
 def process_field_annotations(
@@ -326,7 +315,7 @@ def process_field_annotations(
     owner_cls: type,
     parent_classvars: set[str] | None = None,
     skip: frozenset[str] = frozenset(),
-) -> tuple[list[tuple[str, AttributeDescriptor]], set[str], list[tuple[str, Any]]]:
+) -> tuple[list[tuple[str, AttributeDescriptor]], set[str], list[AttributeDescriptor]]:
     """扫描本类 annotations，过滤 ClassVar，为每个字段创建 AttributeDescriptor。
 
     skip: 内部基础设施属性名集合，不进 field 系统。
@@ -334,11 +323,10 @@ def process_field_annotations(
     返回:
         (field_descriptors, classvar_attrs, inherited_redeclared)
         - field_descriptors: [(attr_name, descriptor), ...]，调用方负责挂载到 cls 上
-          及更新 _attribute_registry
         - classvar_attrs: 本类 annotations 中识别为 ClassVar 的字段名集合
         - inherited_redeclared: 父类已有 AttributeDescriptor、本类仅重复声明 annotation
-          但未提供新值的字段 [(attr_name, attr_type), ...]。Declaration 需要将其
-          记入自身 attr_registry 以保持字段顺序；Extension/Implementation 可忽略。
+          但未提供新值的字段 [AttributeDescriptor, ...]。每个 descriptor 是父类
+          描述符的拷贝（owner_cls 设为本类），调用方负责 setattr + 记入 attr_registry。
 
     注意：此函数只处理本类 annotations，不处理父类字段覆写（Declaration 独有逻辑）。
     Extension / Implementation 的简单字段声明走这一条路即可。
@@ -347,7 +335,7 @@ def process_field_annotations(
         parent_classvars = set()
     classvar_attrs: set[str] = set()
     descriptors: list[tuple[str, AttributeDescriptor]] = []
-    inherited_redeclared: list[tuple[str, Any]] = []
+    inherited_redeclared: list[AttributeDescriptor] = []
     owner_name = owner_cls.__name__
 
     for attr_name, attr_type in annotations.items():
@@ -356,7 +344,7 @@ def process_field_annotations(
         if is_classvar(attr_type, module) or attr_name in parent_classvars:
             classvar_attrs.add(attr_name)
             value = namespace.get(attr_name)
-            if isinstance(value, Field):
+            if isinstance(value, FieldSpec):
                 raise TypeError(
                     f"'{owner_name}' attribute '{attr_name}' is ClassVar "
                     f"and does not support field(default_factory=...). "
@@ -365,7 +353,7 @@ def process_field_annotations(
             continue
 
         value = namespace.get(attr_name)
-        if isinstance(value, Field):
+        if isinstance(value, FieldSpec):
             descriptor = AttributeDescriptor(
                 attr_name,
                 attr_type,
@@ -390,15 +378,33 @@ def process_field_annotations(
                 default=value,
                 owner_cls=owner_cls,
             )
-        elif not hasattr(owner_cls, attr_name) or not isinstance(
-            getattr(owner_cls, attr_name), AttributeDescriptor
-        ):
-            descriptor = AttributeDescriptor(attr_name, attr_type, owner_cls=owner_cls)
         else:
-            # 父类已是 AttributeDescriptor、本类无新值：仅重复声明 annotation。
-            # Declaration 需要记入自身 attr_registry，Extension/Implementation 不需。
-            inherited_redeclared.append((attr_name, attr_type))
-            continue
+            # 检查父类是否已有 AttributeDescriptor（用 base.__dict__ 沿 MRO 查找，
+            # 绕过描述符协议，避免 getattr 返回 FieldInfo）。
+            parent_desc: AttributeDescriptor | None = None
+            for base in owner_cls.__mro__[1:]:
+                base_val = base.__dict__.get(attr_name)
+                if isinstance(base_val, AttributeDescriptor):
+                    parent_desc = base_val
+                    break
+            if parent_desc is not None:
+                # 父类已有描述符、本类无新值：拷贝父类描述符（owner_cls 改为本类）。
+                desc = AttributeDescriptor(
+                    attr_name,
+                    parent_desc.annotation,
+                    default=parent_desc.default,
+                    default_factory=parent_desc.default_factory,
+                    init=parent_desc.init,
+                    owner_cls=owner_cls,
+                    readonly=parent_desc.readonly,
+                    has_storage=parent_desc.has_storage,
+                    fget=parent_desc.fget if not parent_desc.has_storage else None,
+                    fset=parent_desc.fset if not parent_desc.has_storage else None,
+                )
+                inherited_redeclared.append(desc)
+                continue
+            else:
+                descriptor = AttributeDescriptor(attr_name, attr_type, owner_cls=owner_cls)
 
         validate_field_descriptor(owner_name, descriptor)
         descriptors.append((attr_name, descriptor))

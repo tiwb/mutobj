@@ -35,7 +35,7 @@ def use_field_default() -> None:
 def use_fields() -> None:
     descriptors = mutobj.fields(Action)
     info = descriptors["categories"]
-    # info has class AttributeDescriptor, returned as a Mapping value.
+    # info has class FieldInfo, returned as a Mapping value.
     info.make_default()
 
 

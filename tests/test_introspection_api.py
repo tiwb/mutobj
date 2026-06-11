@@ -231,35 +231,6 @@ class TestImplCallSuperAlias:
 
 class TestAttributeDescriptorDefaults:
 
-    def test_get_default_returns_scalar_default(self) -> None:
-        class Item(mutobj.Declaration):
-            count: int = 3
-
-        assert Item.count.get_default() == 3
-        assert Item.count.make_default() == 3
-
-    def test_get_default_returns_factory_and_make_default_executes_it(self) -> None:
-        class Item(mutobj.Declaration):
-            entries: list[int] = mutobj.field(default_factory=lambda: [1, 2, 3])
-
-        factory = Item.entries.get_default()
-        assert callable(factory)
-        assert factory() == [1, 2, 3]
-        made = Item.entries.make_default()
-        assert made == [1, 2, 3]
-        assert made is not factory()
-
-    def test_get_default_without_default_raises(self) -> None:
-        class Item(mutobj.Declaration):
-            value: int
-
-        try:
-            Item.value.get_default()
-        except ValueError as exc:
-            assert "has no default" in str(exc)
-        else:
-            raise AssertionError("expected ValueError")
-
     def test_make_default_without_default_raises(self) -> None:
         class Item(mutobj.Declaration):
             value: int
@@ -327,17 +298,17 @@ class TestFieldReflectionAPI:
         else:
             raise AssertionError("expected TypeError")
 
-    def test_field_info_returns_descriptor(self) -> None:
+    def test_field_info_returns_field_info(self) -> None:
         class Action(mutobj.Declaration):
             categories: tuple[str, ...] = ("a",)
 
-        from mutobj import AttributeDescriptor
+        from mutobj import FieldInfo
 
         info = mutobj.field_info(Action.categories)
-        assert isinstance(info, AttributeDescriptor)
+        assert isinstance(info, FieldInfo)
         assert info.name == "categories"
         assert info.has_default is True
-        assert info.default == ("a",)
+        assert info.make_default() == ("a",)
         assert info.init is True
 
     def test_field_info_rejects_non_descriptor(self) -> None:
@@ -348,18 +319,18 @@ class TestFieldReflectionAPI:
         else:
             raise AssertionError("expected TypeError")
 
-    def test_fields_returns_all_descriptors(self) -> None:
+    def test_fields_returns_all_field_infos(self) -> None:
         class Action(mutobj.Declaration):
             categories: tuple[str, ...] = ()
             order: int | None = None
             label: str = "x"
 
-        from mutobj import AttributeDescriptor
+        from mutobj import FieldInfo
 
         result = mutobj.fields(Action)
         assert set(result.keys()) == {"categories", "order", "label"}
         for name, info in result.items():
-            assert isinstance(info, AttributeDescriptor)
+            assert isinstance(info, FieldInfo)
             assert info.name == name
 
     def test_fields_inheritance_mro_order(self) -> None:
@@ -384,7 +355,7 @@ class TestFieldReflectionAPI:
         assert mutobj.field_default(Child.x) == 99
         assert mutobj.field_default(Base.x) == 1
         # fields(Child) 返回最派生的 descriptor
-        assert mutobj.fields(Child)["x"].default == 99
+        assert mutobj.fields(Child)["x"].make_default() == 99
 
     def test_fields_dynamic_field_name_use_case(self) -> None:
         """上下文：动态字段名场景走 fields(cls)[name]。"""

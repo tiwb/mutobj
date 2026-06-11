@@ -366,3 +366,108 @@ class TestInheritedImplCollision:
             pass
 
         assert Child(name="World").greet() == "Hello World"
+
+
+class TestFieldRedeclaration:
+    """子类以纯 annotation 重复声明父类字段的行为"""
+
+    def test_redeclare_preserves_parent_default(self):
+        """重复声明纯 annotation 不丢失父类默认值"""
+        class Base(mutobj.Declaration):
+            x: int = 10
+
+        class Child(Base):
+            x: int
+
+        assert Child().x == 10
+
+    def test_redeclare_preserves_default_factory(self):
+        """重复声明不丢失父类 default_factory"""
+        class Base(mutobj.Declaration):
+            items: list[int] = mutobj.field(default_factory=list)
+
+        class Child(Base):
+            items: list[int]
+
+        c = Child()
+        assert c.items == []
+        assert c.items is not Child().items  # 每次求值独立
+
+    def test_redeclare_required_field_still_required(self):
+        """重复声明必填字段，构造时仍然报错"""
+        class Base(mutobj.Declaration):
+            x: int
+
+        class Child(Base):
+            x: int
+
+        with pytest.raises(TypeError, match="missing field"):
+            Child()
+
+    def test_redeclare_with_new_value_overrides(self):
+        """重复声明带新值正确覆盖默认值"""
+        class Base(mutobj.Declaration):
+            x: int = 10
+
+        class Child(Base):
+            x: int = 20
+
+        assert Child().x == 20
+
+    def test_impl_getter_does_not_affect_parent(self):
+        """子类 @impl getter 不影响父类实例"""
+        class Base(mutobj.Declaration):
+            x: int = 10
+
+        class Child(Base):
+            x: int
+
+        @mutobj.impl(Child.x.getter)
+        def _g(self):
+            return 99
+
+        assert Child().x == 99
+        assert Base().x == 10
+
+    def test_impl_getter_does_not_affect_sibling(self):
+        """子类 @impl getter 不影响兄弟类"""
+        class Base(mutobj.Declaration):
+            x: int = 10
+
+        class ChildA(Base):
+            x: int
+
+        class ChildB(Base):
+            x: int
+
+        @mutobj.impl(ChildA.x.getter)
+        def _g(self):
+            return 99
+
+        assert ChildA().x == 99
+        assert ChildB().x == 10
+
+    def test_redeclare_visible_in_fields(self):
+        """重复声明的字段在 mutobj.fields() 中可见"""
+        class Base(mutobj.Declaration):
+            x: int = 10
+            y: str = "a"
+
+        class Child(Base):
+            x: int
+            z: float = 1.0
+
+        assert list(mutobj.fields(Child).keys()) == ["x", "y", "z"]
+
+    def test_multi_level_redeclare(self):
+        """多层继承：祖(声明)→父(透传)→子(覆写)"""
+        class Grand(mutobj.Declaration):
+            x: int = 1
+
+        class Parent(Grand):
+            pass  # 透传，不覆写
+
+        class Child(Parent):
+            x: int
+
+        assert Child().x == 1

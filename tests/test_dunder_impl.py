@@ -10,6 +10,7 @@ import types
 import pytest
 
 import mutobj
+from mutobj.core._classmeta import decl_meta_cache
 
 
 class TestDunderImpl:
@@ -99,7 +100,7 @@ class TestReservedDunders:
 
         assert Child in called
         # 不应被注册为 declared method
-        assert "__init_subclass__" not in Parent.__mutobj_class_meta__.impl_chains
+        assert "__init_subclass__" not in decl_meta_cache[Parent].impl_chains
 
 
 class TestAmbiguousFallback:

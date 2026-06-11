@@ -3,8 +3,9 @@
 import pytest
 
 import mutobj
+from mutobj.core._classmeta import decl_meta_cache
 from mutobj import field
-from mutobj.core._fields import AttributeDescriptor, _ordered_fields_cache
+from mutobj.core._fields import AttributeDescriptor
 
 
 class _SetAttrBase(mutobj.Declaration):
@@ -89,11 +90,11 @@ class TestClassLevelAssignment:
             pass
 
         # 子类 registry 初始不含 x
-        child_reg = Child.__mutobj_class_meta__.fields
+        child_reg = decl_meta_cache[Child].fields
         assert "x" not in child_reg
 
         Child.x = 20
-        assert "x" in Child.__mutobj_class_meta__.fields
+        assert "x" in decl_meta_cache[Child].fields
 
     def test_ordered_fields_cache_invalidated(self):
         class P(mutobj.Declaration):
@@ -102,13 +103,14 @@ class TestClassLevelAssignment:
         class C(P):
             pass
 
-        # 触发缓存
+        # 触发 lazy 计算
         C()
-        had_cache = C in _ordered_fields_cache
+        mc = decl_meta_cache[C]
+        assert mc.ordered_descriptors is not None
 
+        # __setattr__ 之后应失效
         C.val = "b"
-        if had_cache:
-            assert C not in _ordered_fields_cache
+        assert mc.ordered_descriptors is None
 
     def test_descriptor_assignment_passthrough(self):
         desc = AttributeDescriptor("name", str, default="direct")

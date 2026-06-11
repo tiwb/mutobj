@@ -7,7 +7,8 @@ import pytest
 from typing import ClassVar
 
 import mutobj
-from mutobj.core._fields import AttributeDescriptor
+from mutobj.core._classmeta import decl_meta_cache
+from mutobj.core._fields import AttributeDescriptor, FieldInfo
 
 
 def _exec_module(source: str, module_name: str, *, keep: bool = False) -> dict:
@@ -35,7 +36,7 @@ class TestClassVarBasic:
         assert not isinstance(Foo._app, AttributeDescriptor)
 
         # 正常字段：类级读仍是描述符
-        assert isinstance(Foo.name, AttributeDescriptor)
+        assert isinstance(Foo.name, FieldInfo)
 
     def test_classvar_instance_falls_back_to_class(self):
         class Foo(mutobj.Declaration):
@@ -51,7 +52,7 @@ class TestClassVarBasic:
             _app: ClassVar[int] = 0
             name: str = "foo"
 
-        reg = Foo.__mutobj_class_meta__.fields
+        reg = decl_meta_cache[Foo].fields
         assert "app" not in reg
         assert "name" in reg
 
@@ -125,7 +126,7 @@ class TestClassVarStringAnnotation:
         Foo = ns["Foo"]
         assert Foo._key is None
         assert not isinstance(Foo._key, AttributeDescriptor)
-        assert isinstance(Foo.name, AttributeDescriptor)
+        assert isinstance(Foo.name, FieldInfo)
 
     def test_qualified_typing_classvar_string(self):
         ns = _exec_module(
@@ -283,7 +284,7 @@ class TestClassVarInheritance:
             Child = child_ns["Child"]
             assert Child.app == "child"
             assert not isinstance(Child.app, AttributeDescriptor)
-            assert "app" not in Child.__mutobj_class_meta__.fields
+            assert "app" not in decl_meta_cache[Child].fields
         finally:
             sys.modules.pop("test_classvar_parent_mod", None)
 
@@ -305,8 +306,8 @@ class TestClassVarCoexistWithFields:
         assert not isinstance(App.debug, AttributeDescriptor)
 
         # 普通字段是描述符
-        assert isinstance(App.name, AttributeDescriptor)
-        assert isinstance(App.port, AttributeDescriptor)
+        assert isinstance(App.name, FieldInfo)
+        assert isinstance(App.port, FieldInfo)
 
     def test_classvar_assignment_does_not_cause_descriptor_rebuild(self):
         """ClassVar 赋值走正常 Python __setattr__，不触发描述符重建"""
@@ -337,7 +338,7 @@ class TestClassVarReload:
             "test_classvar_reload_field_to_classvar",
         )
         cls = g1["ReloadClassVar"]
-        assert isinstance(cls.x, AttributeDescriptor)
+        assert isinstance(cls.x, FieldInfo)
 
         g2 = self._redefine(
             "from typing import ClassVar\n"
@@ -349,7 +350,7 @@ class TestClassVarReload:
         assert cls2 is cls
         assert cls.x == 2
         assert not isinstance(cls.__dict__["x"], AttributeDescriptor)
-        assert "x" not in cls.__mutobj_class_meta__.fields
+        assert "x" not in decl_meta_cache[cls].fields
         assert cls().x == 2
 
     def test_redefinition_classvar_to_field_creates_descriptor(self):
@@ -370,8 +371,8 @@ class TestClassVarReload:
         )
         cls2 = g2["ReloadField"]
         assert cls2 is cls
-        assert isinstance(cls.x, AttributeDescriptor)
-        assert "x" in cls.__mutobj_class_meta__.fields
+        assert isinstance(cls.x, FieldInfo)
+        assert "x" in decl_meta_cache[cls].fields
         assert cls().x == 2
 
     def test_redefinition_classvar_default_updates_plain_value(self):

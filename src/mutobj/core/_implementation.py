@@ -1,28 +1,23 @@
 from __future__ import annotations
 
 import weakref
-from typing import Any, ClassVar, Generic, TypeVar, cast
+from typing import Any, Generic, TypeVar, cast
 
+from ._classmeta import ImplementationClassMeta, decl_meta_cache, impl_meta_cache, mutobj_meta_cache
 from ._constants import (
     DECLARATION_CHAIN_HOOKS,
     MUTOBJ_INFRA_ATTRS,
 )
-from ._classmeta import ImplementationClassMeta
 from ._declaration import Declaration
-from ._fields import get_attribute_descriptor, process_field_annotations
-from ._impls import apply_impl, register_to_chain
 from ._discovery import (
     bump_registry_generation,
 )
+from ._fields import AttributeDescriptor, get_ordered_descriptors, process_field_annotations
+from ._impls import apply_impl, register_to_chain
 from ._typing_utils import is_classvar
 
 T = TypeVar("T", bound=Declaration)
 IT = TypeVar("IT", bound="Implementation[Any]")
-
-
-def _impl_meta(cls: type) -> ImplementationClassMeta:
-    """Get the ImplementationClassMeta for an Implementation subclass."""
-    return cast(ImplementationClassMeta, getattr(cls, "__mutobj_class_meta__"))
 
 
 def _implementation_source_key(impl_cls: type) -> str:
@@ -61,7 +56,7 @@ def _lookup_implementation_class(
     decl_cls: type[T],
 ) -> type["Implementation[T]"] | None:
     for klass in decl_cls.__mro__:
-        meta = getattr(klass, "__mutobj_class_meta__", None)
+        meta = decl_meta_cache.get(klass)
         if meta is None:
             continue
         impl_cls = meta.impl_class
@@ -145,11 +140,17 @@ def _register_implementation_methods(
     target_cls: type[Declaration],
 ) -> None:
     source_key = _implementation_source_key(impl_cls)
-    declared_methods: set[str] = target_cls.__mutobj_class_meta__.methods
+    target_mc = decl_meta_cache[target_cls]
+    declared_methods: set[str] = target_mc.methods
     bridged_methods = declared_methods | DECLARATION_CHAIN_HOOKS
 
     for method_name, method_value in impl_cls.__dict__.items():
-        target_desc = get_attribute_descriptor(target_cls, method_name)
+        target_desc = None
+        for klass in target_cls.__mro__:
+            desc = klass.__dict__.get(method_name)
+            if isinstance(desc, AttributeDescriptor):
+                target_desc = desc
+                break
         if isinstance(method_value, property):
             if target_desc is None:
                 if method_name in bridged_methods and hasattr(target_cls, method_name):
@@ -220,7 +221,8 @@ def _register_implementation_class(
     impl_cls: type,
     target_cls: type[Declaration],
 ) -> None:
-    existing_impl = target_cls.__mutobj_class_meta__.impl_class
+    target_mc = decl_meta_cache[target_cls]
+    existing_impl = target_mc.impl_class
     if existing_impl is not None and existing_impl is not impl_cls:
         if (
             existing_impl.__module__ != impl_cls.__module__
@@ -233,7 +235,7 @@ def _register_implementation_class(
 
     parent_impl: type | None = None
     for base in target_cls.__mro__[1:]:
-        base_meta = getattr(base, "__mutobj_class_meta__", None)
+        base_meta = decl_meta_cache.get(base)
         if base_meta is None:
             continue
         parent_impl = base_meta.impl_class
@@ -245,8 +247,8 @@ def _register_implementation_class(
             f"because {target_cls.__name__} inherits its Declaration methods"
         )
 
-    _impl_meta(impl_cls).target_class = target_cls
-    target_cls.__mutobj_class_meta__.impl_class = impl_cls
+    impl_meta_cache[impl_cls].target_class = target_cls
+    target_mc.impl_class = impl_cls
     _register_implementation_methods(impl_cls, target_cls)
     bump_registry_generation()
 
@@ -324,14 +326,20 @@ class ImplementationMeta(type):
         attr_registry: dict[str, Any] = {}
         for attr_name, descriptor in descriptors:
             type.__setattr__(cls, attr_name, descriptor)
-            attr_registry[attr_name] = descriptor.annotation
-        for attr_name, attr_type in inherited_redeclared:
-            attr_registry[attr_name] = attr_type
+            attr_registry[attr_name] = descriptor
+        for desc in inherited_redeclared:
+            type.__setattr__(cls, desc.name, desc)
+            attr_registry[desc.name] = desc
         if attr_registry:
-            cast(Any, cls).__mutobj_class_meta__ = ImplementationClassMeta(fields=attr_registry)
+            mc = ImplementationClassMeta(fields=attr_registry)
+            impl_meta_cache[cls] = mc
+            mutobj_meta_cache[cls] = mc
+            get_ordered_descriptors(cls, mc)
             bump_registry_generation()
         else:
-            cast(Any, cls).__mutobj_class_meta__ = ImplementationClassMeta()
+            mc = ImplementationClassMeta()
+            impl_meta_cache[cls] = mc
+            mutobj_meta_cache[cls] = mc
 
         # target_class 解析与注册（原 __init_subclass__ 逻辑平移）。
         target_cls = _resolve_target_class(cls)
@@ -347,7 +355,6 @@ class Implementation(Generic[T], metaclass=ImplementationMeta):
     # __weakref__ 不需要：owner 信息通过 __mutobj_storage__ 上的 weakref 追溯 decl。
     __slots__ = ("__mutobj_storage__",)
     __mutobj_storage__: dict[str, Any]
-    __mutobj_class_meta__: ClassVar[ImplementationClassMeta]
 
 
 def implementation_class(

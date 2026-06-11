@@ -2,6 +2,7 @@
 
 import pytest
 import mutobj
+from mutobj.core._classmeta import decl_meta_cache
 
 from mutobj.core._discovery import class_registry
 
@@ -42,7 +43,7 @@ class TestInPlaceRedefinition:
             "    def alpha(self) -> str: ...\n"
         )
         cls = g1["Svc"]
-        declared = cls.__mutobj_class_meta__.methods
+        declared = decl_meta_cache[cls].methods
         assert "alpha" in declared
 
         g2 = _exec_class(
@@ -52,7 +53,7 @@ class TestInPlaceRedefinition:
         cls2 = g2["Svc"]
         assert cls is cls2
 
-        declared2 = cls.__mutobj_class_meta__.methods
+        declared2 = decl_meta_cache[cls].methods
         assert "beta" in declared2
 
     def test_redefinition_removes_deleted_attrs(self):
@@ -161,8 +162,7 @@ class TestInPlaceRedefinition:
             "    def process(self) -> str: ...\n"
         )
         cls = g1["Migr"]
-        assert hasattr(cls, "__mutobj_class_meta__")
-        assert "process" in cls.__mutobj_class_meta__.impl_chains
+        assert "process" in decl_meta_cache[cls].impl_chains
 
         # Redefine
         g2 = _exec_class(
@@ -175,5 +175,4 @@ class TestInPlaceRedefinition:
         assert cls is cls2
 
         # Registries should point to existing class
-        assert hasattr(cls, "__mutobj_class_meta__")
-        assert "process" in cls.__mutobj_class_meta__.impl_chains
+        assert "process" in decl_meta_cache[cls].impl_chains

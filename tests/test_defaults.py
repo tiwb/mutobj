@@ -3,6 +3,7 @@
 import pytest
 
 import mutobj
+from mutobj.core._classmeta import decl_meta_cache
 from mutobj import field
 from mutobj.core._fields import AttributeDescriptor, MISSING
 
@@ -338,7 +339,7 @@ class TestDescriptorInternals:
 
     def test_missing_sentinel(self):
         assert repr(MISSING) == "MISSING"
-        assert bool(MISSING) is False
+        assert bool(MISSING) is True
 
 
 # ── 无注解属性覆盖 ────────────────────────────────────────────
@@ -480,7 +481,7 @@ class TestUnannotatedOverride:
         class Child(Base):
             val = 99
 
-        assert "val" in Child.__mutobj_class_meta__.fields
+        assert "val" in decl_meta_cache[Child].fields
 
     def test_unannotated_override_with_impl(self):
         """无注解覆盖属性在 @impl 方法中可正确访问"""
