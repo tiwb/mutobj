@@ -58,15 +58,15 @@ def _resolve_target_class(impl_cls: type) -> type[Declaration] | None:
 
 
 def _lookup_implementation_class(
-    decl_cls: type[Declaration],
-) -> type["Implementation[Any]"] | None:
+    decl_cls: type[T],
+) -> type["Implementation[T]"] | None:
     for klass in decl_cls.__mro__:
         meta = getattr(klass, "__mutobj_class_meta__", None)
         if meta is None:
             continue
         impl_cls = meta.impl_class
         if impl_cls is not None:
-            return cast(type[Implementation[Any]], impl_cls)
+            return cast(type[Implementation[T]], impl_cls)
     return None
 
 
@@ -269,7 +269,7 @@ def prepare_implementation_instance(decl: Declaration) -> Any | None:
     # 声明字段赋值时 AttributeDescriptor 写入此处；未声明（有 __dict__ 时）走 __dict__。
     impl.__mutobj_storage__ = {}
     _bind_implementation_instance(decl, impl)
-    return impl  # pyright: ignore[reportUnknownVariableType]
+    return impl
 
 
 class ImplementationMeta(type):
@@ -328,10 +328,10 @@ class ImplementationMeta(type):
         for attr_name, attr_type in inherited_redeclared:
             attr_registry[attr_name] = attr_type
         if attr_registry:
-            cls.__mutobj_class_meta__ = ImplementationClassMeta(fields=attr_registry)  # type: ignore[reportAttributeAccessIssue]
+            cast(Any, cls).__mutobj_class_meta__ = ImplementationClassMeta(fields=attr_registry)
             bump_registry_generation()
         else:
-            cls.__mutobj_class_meta__ = ImplementationClassMeta()  # type: ignore[reportAttributeAccessIssue]
+            cast(Any, cls).__mutobj_class_meta__ = ImplementationClassMeta()
 
         # target_class 解析与注册（原 __init_subclass__ 逻辑平移）。
         target_cls = _resolve_target_class(cls)
@@ -358,7 +358,7 @@ def implementation_class(
         raise LookupError(
             f"No Implementation class is registered for {decl_cls.__name__}"
         )
-    return cast(type[Implementation[T]], impl_cls)  # pyright: ignore[reportUnknownVariableType]
+    return impl_cls
 
 
 def implementation_of(decl: Declaration, impl_cls: type[IT]) -> IT:

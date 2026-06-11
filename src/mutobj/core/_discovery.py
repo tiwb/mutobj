@@ -27,7 +27,7 @@ def discover_subclasses(base_cls: type[T]) -> list[type[T]]:
     return [
         cls
         for cls in class_registry.values()
-        if cls is not base_cls and isinstance(cls, type) and issubclass(cls, base_cls)  # pyright: ignore[reportUnnecessaryIsInstance]
+        if cls is not base_cls and issubclass(cls, base_cls)
     ]
 
 

@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Any, Callable, Mapping, TypeVar
+from typing import Any, Callable, Mapping, TypeVar, cast
 
 from ._constants import MUTABLE_TYPES
 from ._typing_utils import is_classvar
@@ -378,7 +378,7 @@ def process_field_annotations(
             if callable(value) or isinstance(value, property):
                 continue
             if isinstance(value, MUTABLE_TYPES):
-                type_name = type(value).__name__  # pyright: ignore[reportUnknownArgumentType]
+                type_name = type(cast(object, value)).__name__
                 raise TypeError(
                     f"'{owner_name}' attribute '{attr_name}' uses mutable default "
                     f"value {type_name}. "

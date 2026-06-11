@@ -21,7 +21,7 @@ def _ext_meta(cls: type) -> ExtensionClassMeta:
     return cast(ExtensionClassMeta, getattr(cls, "__mutobj_class_meta__"))
 
 
-def _resolve_extension_target_class(cls: type) -> type | None:
+def _resolve_extension_target_class(cls: type) -> type[Declaration] | None:
     """从 Extension 子类的 __orig_bases__ 中解析 Extension[T] 的 T。"""
     # 延迟绑定——Extension 基类本身进入 ExtensionMeta.__new__ 时 Extension 还未赋值。
     extension_cls = globals().get("Extension")
@@ -32,7 +32,7 @@ def _resolve_extension_target_class(cls: type) -> type | None:
         if origin is not None and isinstance(origin, type) and issubclass(origin, extension_cls):
             args = getattr(base, "__args__", None)
             if args:
-                return args[0]  # pyright: ignore[reportUnknownVariableType]
+                return args[0]
     return None
 
 
@@ -90,18 +90,18 @@ class ExtensionMeta(type):
         # 登记到 __mutobj_class_meta__.fields，使 fields(cls) / get_missing_construction_fields
         # 能看到 Extension 子类的字段。
         if attr_registry:
-            cls.__mutobj_class_meta__ = ExtensionClassMeta(fields=attr_registry)  # type: ignore[reportAttributeAccessIssue]
+            cast(Any, cls).__mutobj_class_meta__ = ExtensionClassMeta(fields=attr_registry)
             bump_registry_generation()
         else:
-            cls.__mutobj_class_meta__ = ExtensionClassMeta()  # type: ignore[reportAttributeAccessIssue]
+            cast(Any, cls).__mutobj_class_meta__ = ExtensionClassMeta()
 
         # target_class 解析与注册。
         target_cls = _resolve_extension_target_class(cls)
         if target_cls is not None:
-            _ext_meta(cls).target_class = target_cls  # pyright: ignore[reportAttributeAccessIssue]
-            target_cls.__mutobj_class_meta__.extensions.append(  # type: ignore[reportAttributeAccessIssue]
+            _ext_meta(cls).target_class = target_cls
+            target_cls.__mutobj_class_meta__.extensions.append(
 
-                cls,  # pyright: ignore[reportArgumentType]
+                cls,
             )
 
         return cls

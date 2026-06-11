@@ -53,7 +53,6 @@ class DeclarationMeta(type):
         module = namespace.get("__module__", "")
         qualname = namespace.get("__qualname__", name)
         key = (module, qualname)
-        existing = class_registry.get(key)
 
         declared_methods: set[str] = set()
         declared_classmethods: set[str] = set()
@@ -73,13 +72,13 @@ class DeclarationMeta(type):
                 if callable(hook):
                     hook.__mutobj_class__ = cls
                     _decl_meta(cls).impl_chains.setdefault(hook_name, []).append(ImplChainEntry(func=hook, source_module="__default__", seq=0))
-                    _decl_meta(cls).methods.add(hook_name)  # type: ignore[reportAttributeAccessIssue]
+                    _decl_meta(cls).methods.add(hook_name)
             return cls
 
         annotations = getattr(cls, "__annotations__", {})
 
         # 初始化 per-class 元数据容器
-        cls.__mutobj_class_meta__ = DeclarationClassMeta()  # type: ignore[reportAttributeAccessIssue]
+        cls.__mutobj_class_meta__ = DeclarationClassMeta()
 
         parent_classvars: set[str] = set()
         module = namespace.get("__module__", "")
@@ -143,7 +142,7 @@ class DeclarationMeta(type):
                     owner_cls=cls,
                 )
             elif isinstance(value, MUTABLE_TYPES):
-                type_name = type(value).__name__  # pyright: ignore[reportUnknownArgumentType]
+                type_name = type(cast(object, value)).__name__
                 raise TypeError(
                     f"Declaration '{name}' attribute '{attr_name}' uses mutable default "
                     f"value {type_name}. "
@@ -195,7 +194,7 @@ class DeclarationMeta(type):
             if method_name in MUTOBJ_RESERVED_DUNDERS:
                 continue
             if isinstance(method_value, classmethod):
-                func: Any = method_value.__func__  # pyright: ignore[reportUnknownMemberType, reportUnknownVariableType]
+                func: Any = cast(Any, method_value).__func__
                 declared_classmethods.add(method_name)
                 mc.impl_chains.setdefault(method_name, []).append(ImplChainEntry(func=func, source_module="__default__", seq=0))
                 func.__mutobj_class__ = cls
@@ -204,7 +203,7 @@ class DeclarationMeta(type):
             if method_name in MUTOBJ_RESERVED_DUNDERS:
                 continue
             if isinstance(method_value, staticmethod):
-                func: Any = method_value.__func__  # pyright: ignore[reportUnknownMemberType, reportUnknownVariableType]
+                func: Any = cast(Any, method_value).__func__
                 declared_staticmethods.add(method_name)
                 mc.impl_chains.setdefault(method_name, []).append(ImplChainEntry(func=func, source_module="__default__", seq=0))
                 func.__mutobj_class__ = cls
@@ -219,7 +218,7 @@ class DeclarationMeta(type):
 
         # 委托生成：父类声明的方法自动继承到子类
         for base in cls.__mro__[1:]:
-            if base is cls or base is object:  # pyright: ignore[reportUnnecessaryComparison]
+            if base is object:
                 continue
             base_meta = getattr(base, "__mutobj_class_meta__", None)
             if base_meta is None:
@@ -301,7 +300,8 @@ class DeclarationMeta(type):
         mc.classmethods = declared_classmethods
         mc.staticmethods = declared_staticmethods
 
-        if existing is not None and existing is not cls:  # pyright: ignore[reportUnnecessaryComparison]
+        existing = class_registry.get(key)
+        if existing is not None and existing is not cast(type, cls):
             update_class_inplace(existing, cls)
             migrate_registries(existing, cls)
             bump_registry_generation()
@@ -311,6 +311,11 @@ class DeclarationMeta(type):
         bump_registry_generation()
         return cls
 
+    # pyright/mypy 元类 __call__ 的已知局限：cls: type[T] 在语义上完全正确
+    # (T 是 Declaration 子类实例)，但类型检查器要求 cls 必须是 DeclarationMeta
+    # 或其超类型。当前 typing 体系无法同时表达"cls 是元类实例"和"返回值是 T"。
+    # 官方结论：只能用 # type: ignore[misc] 抑制。
+    # 参见 https://github.com/microsoft/pyright/discussions/5561
     def __call__(cls: type[T], *args: Any, **kwargs: Any) -> T:  # type: ignore[misc]
         obj = cls.__new__(cls, *args, **kwargs)
         if isinstance(obj, cls):
@@ -318,7 +323,7 @@ class DeclarationMeta(type):
 
             impl = prepare_implementation_instance(obj)
             cls.__init__(obj, *args, **kwargs)
-            obj.__post_init__()  # type: ignore[attr-defined]
+            obj.__post_init__()
             missing_fields = get_missing_construction_fields(obj)
             if missing_fields:
                 raise TypeError(
@@ -361,7 +366,7 @@ class DeclarationMeta(type):
             return
 
         if isinstance(value, MUTABLE_TYPES):
-            type_name = type(value).__name__  # pyright: ignore[reportUnknownArgumentType]
+            type_name = type(cast(object, value)).__name__
             raise TypeError(
                 f"Declaration '{cls.__name__}' attribute '{name}' uses mutable default "
                 f"value {type_name}. "
@@ -390,7 +395,7 @@ class DeclarationMeta(type):
         validate_field_descriptor(cls.__name__, new_desc)
         super().__setattr__(name, new_desc)
 
-        if from_base and name not in _decl_meta(cls).fields:  # pyright: ignore[reportUnnecessaryContains]
+        if from_base and name not in _decl_meta(cls).fields:
             _decl_meta(cls).fields[name] = desc.annotation
         invalidate_ordered_fields_cache_for(cls)
 

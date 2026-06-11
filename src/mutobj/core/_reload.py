@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Any, Callable
+from typing import Any, Callable, cast
 
 from ._fields import AttributeDescriptor, invalidate_ordered_fields_cache_for
 from ._discovery import class_registry
@@ -44,7 +44,7 @@ def update_class_inplace(existing: type, new_cls: type) -> None:
         if callable(val) and hasattr(val, "__mutobj_class__"):
             val.__mutobj_class__ = existing
         if isinstance(val, (classmethod, staticmethod)):
-            inner: Callable[..., Any] = val.__func__  # pyright: ignore[reportUnknownMemberType, reportUnknownVariableType]
+            inner: Callable[..., Any] = cast(Any, val).__func__
             if hasattr(inner, "__mutobj_class__"):
                 inner.__mutobj_class__ = existing
         if isinstance(val, AttributeDescriptor):

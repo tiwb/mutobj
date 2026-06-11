@@ -174,7 +174,7 @@ def _resolve_source_key(func: Callable[..., Any]) -> str:
 
 def _unwrap_descriptor(candidate: Any) -> Callable[..., Any] | None:
     if isinstance(candidate, (classmethod, staticmethod)):
-        func = getattr(candidate, "__func__", None)  # pyright: ignore[reportUnknownArgumentType]
+        func = getattr(cast(object, candidate), "__func__", None)
         return func if callable(func) else None
     return candidate if callable(candidate) else None
 
