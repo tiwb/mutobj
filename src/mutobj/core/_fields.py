@@ -283,16 +283,11 @@ def _format_field_names(field_names: list[str]) -> str:
 
 
 def validate_field_descriptor(owner_name: str, descriptor: AttributeDescriptor) -> None:
-    """校验字段描述符合法性：has_storage + init=False 必须带 default。
+    """校验字段描述符合法性。
 
     供 Declaration / Extension / Implementation 三套元类共享。错误文案不再带
     类别前缀（"Declaration" / "Extension" 等），只用 owner_name 标识所属类。
     """
-    if descriptor.has_storage and not descriptor.init and not descriptor.has_default:
-        raise TypeError(
-            f"'{owner_name}' field '{descriptor.name}' is init=False but has no "
-            f"default; provide default/default_factory or set init=True."
-        )
 
 
 def validate_construction_fields(obj: Any, owner_label: str, *, hint: str) -> None:

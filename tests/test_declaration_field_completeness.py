@@ -36,23 +36,23 @@ class TestRequiredInitFields:
 
 
 class TestInitFalseValidation:
-    def test_init_false_requires_default(self) -> None:
+    def test_init_false_without_default_allowed(self) -> None:
+        """init=False without default is allowed; caught at construction time."""
+        class Token(mutobj.Declaration):
+            value: str = mutobj.field(init=False)
+
         with pytest.raises(
             TypeError,
-            match=(
-                r"'Token' field 'value' is init=False but has no default; "
-                r"provide default/default_factory or set init=True\."
-            ),
+            match=r"Token missing field\(s\) after construction: 'value'",
         ):
-            class Token(mutobj.Declaration):
-                value: str = mutobj.field(init=False)
+            Token()
 
-    def test_runtime_field_override_keeps_validation(self) -> None:
+    def test_runtime_field_override_init_false_without_default(self) -> None:
+        """Runtime override with init=False without default is allowed."""
         class Token(mutobj.Declaration):
             value: str = "ready"
 
-        with pytest.raises(TypeError, match=r"field 'value' is init=False but has no default"):
-            Token.value = mutobj.field(init=False)
+        Token.value = mutobj.field(init=False)  # no longer raises
 
 
 class TestConstructionCompleteness:
