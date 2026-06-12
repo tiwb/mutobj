@@ -391,7 +391,9 @@ def process_field_annotations(
                     parent_desc = base_val
                     break
             if parent_desc is not None:
-                # 父类已有描述符、本类无新值：拷贝父类描述符（owner_cls 改为本类）。
+                # 子类仅声明注解、无默认值：继承父类描述符（owner_cls 改为本类）。
+                # 这符合 Python 标准行为与 dataclass 规范——纯 annotation 不创建
+                # 新属性，子类实例沿 MRO 继承父类默认值。
                 desc = AttributeDescriptor(
                     attr_name,
                     parent_desc.annotation,
