@@ -94,6 +94,16 @@ class FieldInfo(Generic[_F]):
     def setter(self) -> "AttributeSetterPlaceholder":
         return AttributeSetterPlaceholder(self._desc)
 
+    def raw_get(self, instance: Any) -> _F:
+        """Read the backing-store value for this field, bypassing any
+        ``@impl`` getter override."""
+        return self._desc.raw_get(instance)
+
+    def raw_set(self, instance: Any, value: _F) -> None:
+        """Write the backing-store value for this field, bypassing any
+        ``@impl`` setter override."""
+        self._desc.raw_set(instance, value)
+
     def __repr__(self) -> str:
         return f"FieldInfo(name={self.name!r})"
 
@@ -161,26 +171,7 @@ class AttributeDescriptor:
         if obj is None:
             return self.field_info
         if self.fget is STORAGE:
-            # 字段值统一存放在 obj.__mutobj_storage__（dict），lazy 求值默认值：
-            # - 已显式赋值：直接命中
-            # - default_factory：首次访问求值并缓存（保证多次访问拿到同一对象）
-            # - default：每次返回 self.default，不写入 storage（节省内存）
-            # - 无默认值：抛 AttributeError
-            # 用 storage.get + is 判断替代 try/except KeyError，避免默认值字段
-            # 每次访问都触发异常栈开销。
-            storage: dict[str, Any] = obj.__mutobj_storage__
-            value = storage.get(self.name, _UNSET)
-            if value is not _UNSET:
-                return value
-            if self.default_factory is not None:
-                value = self.default_factory()
-                storage[self.name] = value
-                return value
-            if self.default is not MISSING:
-                return self.default
-            raise AttributeError(
-                f"'{type(obj).__name__}' object has no attribute '{self.name}'"
-            ) from None
+            return self.raw_get(obj)
         if self.fget is None:
             owner_name = self.owner_cls.__name__ if self.owner_cls is not None else "<unknown>"
             raise NotImplementedError(
@@ -192,7 +183,7 @@ class AttributeDescriptor:
     def __set__(self, obj: Any, value: Any) -> None:
         fset = self.fset
         if fset is STORAGE:
-            obj.__mutobj_storage__[self.name] = value
+            self.raw_set(obj, value)
             return
         if fset is None:
             owner_name = self.owner_cls.__name__ if self.owner_cls is not None else "<unknown>"
@@ -209,6 +200,36 @@ class AttributeDescriptor:
             raise AttributeError(
                 f"'{type(obj).__name__}' object has no attribute '{self.name}'"
             ) from exc
+
+    def raw_get(self, instance: Any) -> Any:
+        """Read the backing-store value, bypassing any getter override.
+
+        This is the single source of truth for the default STORAGE read
+        path, called both from :meth:`__get__` (when ``fget is STORAGE``)
+        and from :meth:`FieldInfo.raw_get` for public access.
+        """
+        storage: dict[str, Any] = instance.__mutobj_storage__
+        value = storage.get(self.name, _UNSET)
+        if value is not _UNSET:
+            return value
+        if self.default_factory is not None:
+            value = self.default_factory()
+            storage[self.name] = value
+            return value
+        if self.default is not MISSING:
+            return self.default
+        raise AttributeError(
+            f"'{type(instance).__name__}' object has no attribute '{self.name}'"
+        ) from None
+
+    def raw_set(self, instance: Any, value: Any) -> None:
+        """Write the backing-store value, bypassing any setter override.
+
+        This is the single source of truth for the default STORAGE write
+        path, called both from :meth:`__set__` (when ``fset is STORAGE``)
+        and from :meth:`FieldInfo.raw_set` for public access.
+        """
+        instance.__mutobj_storage__[self.name] = value
 
 
 class AttributeGetterPlaceholder:

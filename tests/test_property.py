@@ -160,3 +160,57 @@ class TestPropertyOverride:
 
         w = Wrapper()
         assert w.wrapped == "v2"  # v2 为活跃实现
+
+
+class TestRegularFieldAccessor:
+    """普通字段（非 property）的 getter/setter 覆盖（guide §2.7）"""
+
+    def test_regular_field_setter_override(self):
+        """@impl 覆盖普通字段的 setter，通过 raw_set 写底层存储"""
+        class Item(mutobj.Declaration):
+            value: int = 0
+
+        _raw_set = mutobj.field_info(Item.value).raw_set
+
+        @mutobj.impl(Item.value.setter)
+        def value_setter(self: Item, v: int) -> None:
+            _raw_set(self, v * 2)
+
+        item = Item()
+        item.value = 5
+        assert item.value == 10
+
+        item.value = 7
+        assert item.value == 14
+
+    def test_regular_field_getter_override(self):
+        """@impl 覆盖普通字段的 getter，通过 raw_get 读底层存储"""
+        class Item(mutobj.Declaration):
+            value: int = 0
+
+        _raw_get = mutobj.field_info(Item.value).raw_get
+
+        @mutobj.impl(Item.value.getter)
+        def value_getter(self: Item) -> int:
+            return _raw_get(self) + 100
+
+        item = Item(value=7)
+        assert item.value == 107
+
+    def test_regular_field_getter_chain(self):
+        """getter 覆盖链：多次 @impl，最后一次为活跃实现"""
+        class Item(mutobj.Declaration):
+            value: int = 0
+
+        @mutobj.impl(Item.value.getter)
+        def getter_v1(self: Item) -> int:
+            return 10
+
+        item = Item(value=1)
+        assert item.value == 10
+
+        @mutobj.impl(Item.value.getter)
+        def getter_v2(self: Item) -> int:
+            return 20
+
+        assert item.value == 20

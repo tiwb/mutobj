@@ -431,3 +431,21 @@ class TestImplementationFieldSystem:
 
         svc = Svc()
         assert svc.get_state() == "override-dynamic"
+
+
+class TestDuplicateImplementation:
+    """一个 Declaration 只能注册一个 Implementation（guide §4B-2）"""
+
+    def test_duplicate_implementation_raises(self):
+        """为同一 Declaration 注册第二个 Implementation 时抛出 TypeError"""
+        class Svc(mutobj.Declaration):
+            def run(self) -> str: ...
+
+        class SvcImpl1(mutobj.Implementation[Svc]):
+            def run(self) -> str:
+                return "impl1"
+
+        with pytest.raises(TypeError, match="already has an implementation class"):
+            class SvcImpl2(mutobj.Implementation[Svc]):
+                def run(self) -> str:
+                    return "impl2"
