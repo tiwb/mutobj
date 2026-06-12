@@ -2,6 +2,7 @@
 """类级属性运行时赋值测试 — DeclarationMeta.__setattr__"""
 
 import pytest
+from typing import ClassVar
 
 import mutobj
 from mutobj import field
@@ -65,14 +66,24 @@ class TestClassLevelAssignment:
         with pytest.raises(TypeError, match="mutable default"):
             _SetAttrBase.name = {}  # type: ignore
 
-    def test_non_declared_attr_passthrough(self):
+    def test_undeclared_class_attr_raises(self):
+        """类级别严格化：未声明 ClassVar 的类级数据赋值被拒绝。"""
         class MyDecl(mutobj.Declaration):
             value: int = 1
 
+        with pytest.raises(TypeError, match="ClassVar"):
+            MyDecl._internal = 42
+        with pytest.raises(TypeError, match="ClassVar"):
+            MyDecl.new_attr = "hello"
+
+    def test_classvar_attr_allowed(self):
+        """声明 ClassVar 后类级赋值放行。"""
+        class MyDecl(mutobj.Declaration):
+            value: int = 1
+            _internal: ClassVar[int] = 0
+
         MyDecl._internal = 42
         assert MyDecl._internal == 42
-        MyDecl.new_attr = "hello"
-        assert MyDecl.new_attr == "hello"
 
     def test_descriptor_preserved(self):
         _SetAttrBase.name = "test_value"

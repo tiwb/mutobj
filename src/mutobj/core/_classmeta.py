@@ -25,6 +25,7 @@ class MutobjClassMeta:
     """Base per-class metadata shared by Declaration / Extension / Implementation."""
 
     fields: dict[str, AttributeDescriptor] = field(default_factory=dict[str, Any])
+    classvars: set[str] = field(default_factory=set[str])
     ordered_descriptors: dict[str, AttributeDescriptor] | None = None
 
 
@@ -46,7 +47,6 @@ class ImplementationClassMeta(MutobjClassMeta):
 class DeclarationClassMeta(MutobjClassMeta):
     """Per-class metadata for Declaration subclasses."""
 
-    classvars: set[str] = field(default_factory=set[str])
     methods: set[str] = field(default_factory=set[str])
     classmethods: set[str] = field(default_factory=set[str])
     staticmethods: set[str] = field(default_factory=set[str])

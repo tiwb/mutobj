@@ -24,3 +24,7 @@ MUTOBJ_INFRA_ATTRS = frozenset({
 DECLARATION_USER_HOOKS = frozenset({
     "__post_init__",
 })
+
+def is_dunder(name: str) -> bool:
+    """Python 语言约定保留命名空间：以 __ 开头且结尾（不含空壳如 ____）。"""
+    return len(name) > 4 and name.startswith("__") and name.endswith("__")

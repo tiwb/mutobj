@@ -3,7 +3,7 @@ from __future__ import annotations
 from typing import Any, Callable, Generic, Mapping, TypeVar, cast
 
 from ._classmeta import MutobjClassMeta, mutobj_meta_cache
-from ._constants import MUTABLE_TYPES
+from ._constants import MUTABLE_TYPES, is_dunder
 from ._typing_utils import is_classvar
 
 
@@ -418,3 +418,87 @@ def process_field_annotations(
         descriptors.append((attr_name, descriptor))
 
     return descriptors, classvar_attrs, inherited_redeclared
+
+
+def _get_classvars(cls: type) -> set[str]:
+    """沿 MRO 收集所有已声明的 ClassVar 属性名。"""
+    result: set[str] = set()
+    for klass in cls.__mro__:
+        mc = mutobj_meta_cache.get(klass)
+        if mc is not None:
+            result.update(mc.classvars)
+    return result
+
+
+def validate_class_setattr(
+    cls: type,
+    name: str,
+    value: Any,
+) -> None:
+    """类级别 __setattr__ 校验。
+
+    按命中顺序检查：
+    1. callable / classmethod / staticmethod / property → 放行
+    2. 已存在于 cls.__dict__ 的属性覆盖 → 放行
+    3. 已声明 ClassVar → 放行
+    4. Python dunder（以 __ 开头且结尾）→ 放行
+    5. 否则 → TypeError
+
+    调用方负责在此之前处理 AttributeDescriptor 分支。
+    """
+    if callable(value) or isinstance(value, (classmethod, staticmethod, property)):
+        return
+
+    if name in cls.__dict__:
+        return
+
+    if name in _get_classvars(cls):
+        return
+
+    # Python dunder（如 __module__ / __classdictcell__ 等）→ 放行
+    if is_dunder(name):
+        return
+
+    raise TypeError(
+        f"Cannot set '{name}' on class '{cls.__name__}': "
+        f"class-level data must be declared with ClassVar[...] annotation. "
+        f"Example: class {cls.__name__}(...):\n"
+        f"    {name}: ClassVar[...] = default_value"
+    )
+
+
+def validate_class_namespace(
+    cls: type,
+    *,
+    skip: frozenset[str] = frozenset(),
+) -> None:
+    """扫描 cls.__dict__，拒绝未声明的数据属性（渠道 A 漏点）。
+
+    cls.__dict__ 中允许存在：
+    - AttributeDescriptor（字段描述符）
+    - callable / classmethod / staticmethod / property
+    - 已声明 ClassVar（纯数据值）
+    - Python dunder（以 __ 开头且结尾）
+    - skip 集中的内部属性
+
+    其余数据值一律 TypeError。
+    """
+    classvars = _get_classvars(cls)
+    for attr_name, attr_value in cls.__dict__.items():
+        if attr_name in skip:
+            continue
+        if is_dunder(attr_name):
+            continue
+        if isinstance(attr_value, AttributeDescriptor):
+            continue
+        if callable(attr_value) or isinstance(attr_value, (classmethod, staticmethod, property)):
+            continue
+        if attr_name in classvars:
+            continue
+
+        raise TypeError(
+            f"'{cls.__name__}' has undeclared class-level data '{attr_name}'. "
+            f"Class-level data must be declared with ClassVar[...] annotation. "
+            f"Example: class {cls.__name__}(...):\n"
+            f"    {attr_name}: ClassVar[...] = default_value"
+        )

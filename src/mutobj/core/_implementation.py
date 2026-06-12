@@ -12,7 +12,14 @@ from ._declaration import Declaration
 from ._discovery import (
     bump_registry_generation,
 )
-from ._fields import AttributeDescriptor, get_ordered_descriptors, process_field_annotations
+from ._fields import (
+    AttributeDescriptor,
+    get_ordered_descriptors,
+    process_field_annotations,
+    validate_class_namespace,
+    validate_class_setattr,
+    validate_field_descriptor,
+)
 from ._impls import apply_impl, register_to_chain
 from ._typing_utils import is_classvar
 
@@ -320,7 +327,7 @@ class ImplementationMeta(type):
                 if is_classvar(base_type, base_module):
                     parent_classvars.add(base_attr)
 
-        descriptors, _classvar_attrs, inherited_redeclared = process_field_annotations(
+        descriptors, classvar_attrs, inherited_redeclared = process_field_annotations(
             annotations, namespace, module, cls, parent_classvars, skip=MUTOBJ_INFRA_ATTRS,
         )
         attr_registry: dict[str, Any] = {}
@@ -331,13 +338,13 @@ class ImplementationMeta(type):
             type.__setattr__(cls, desc.name, desc)
             attr_registry[desc.name] = desc
         if attr_registry:
-            mc = ImplementationClassMeta(fields=attr_registry)
+            mc = ImplementationClassMeta(fields=attr_registry, classvars=classvar_attrs)
             impl_meta_cache[cls] = mc
             mutobj_meta_cache[cls] = mc
             get_ordered_descriptors(cls, mc)
             bump_registry_generation()
         else:
-            mc = ImplementationClassMeta()
+            mc = ImplementationClassMeta(classvars=classvar_attrs)
             impl_meta_cache[cls] = mc
             mutobj_meta_cache[cls] = mc
 
@@ -346,7 +353,20 @@ class ImplementationMeta(type):
         if target_cls is not None:
             _register_implementation_class(cls, target_cls)
 
+        # 类级别严格化：拒绝渠道 A（namespace → cls.__dict__）中
+        # 未被 process_field_annotations 处理的无 annotation 数据属性。
+        validate_class_namespace(cls, skip=MUTOBJ_INFRA_ATTRS)
+
         return cls
+
+    def __setattr__(cls, name: str, value: Any) -> None:
+        if isinstance(value, AttributeDescriptor):
+            validate_field_descriptor(cls.__name__, value)
+            type.__setattr__(cls, name, value)
+            return
+
+        validate_class_setattr(cls, name, value)
+        type.__setattr__(cls, name, value)
 
 
 class Implementation(Generic[T], metaclass=ImplementationMeta):

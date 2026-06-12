@@ -7,14 +7,16 @@ from ._constants import (
     DECLARATION_CHAIN_HOOKS,
     MUTABLE_TYPES,
     MUTOBJ_RESERVED_DUNDERS,
+    is_dunder,
 )
 from ._fields import (
     AttributeDescriptor,
     FieldSpec,
     get_ordered_descriptors,
     process_field_annotations,
-    validate_field_descriptor,
+    validate_class_setattr,
     validate_construction_fields,
+    validate_field_descriptor,
 )
 from ._reload import migrate_registries, update_class_inplace
 from ._discovery import (
@@ -107,6 +109,8 @@ class DeclarationMeta(type):
         for attr_name, value in namespace.items():
             if attr_name in own_annotations:
                 continue
+            if is_dunder(attr_name):
+                continue
             if attr_name in parent_classvars:
                 classvar_attrs.add(attr_name)
                 if isinstance(value, FieldSpec):
@@ -128,7 +132,12 @@ class DeclarationMeta(type):
                     parent_desc = base_val
                     break
             if parent_desc is None:
-                continue
+                raise TypeError(
+                    f"Declaration '{name}' has undeclared class-level data '{attr_name}'. "
+                    f"Class-level data must be declared with ClassVar[...] annotation. "
+                    f"Example: class {name}(Declaration):\n"
+                    f"    {attr_name}: ClassVar[...] = default_value"
+                )
 
             if isinstance(value, FieldSpec):
                 descriptor = AttributeDescriptor(
@@ -352,6 +361,7 @@ class DeclarationMeta(type):
                     break
 
         if desc is None:
+            validate_class_setattr(cls, name, value)
             super().__setattr__(name, value)
             return
 

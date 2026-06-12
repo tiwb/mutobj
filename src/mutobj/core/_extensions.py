@@ -6,9 +6,13 @@ from ._classmeta import ExtensionClassMeta, decl_meta_cache, ext_meta_cache, mut
 from ._constants import MUTOBJ_INFRA_ATTRS
 from ._declaration import Declaration
 from ._fields import (
+    AttributeDescriptor,
     get_ordered_descriptors,
     process_field_annotations,
+    validate_class_namespace,
+    validate_class_setattr,
     validate_construction_fields,
+    validate_field_descriptor,
 )
 from ._discovery import bump_registry_generation
 from ._typing_utils import is_classvar
@@ -73,7 +77,7 @@ class ExtensionMeta(type):
                 if is_classvar(base_type, base_module):
                     parent_classvars.add(base_attr)
 
-        descriptors, _classvar_attrs, inherited_redeclared = process_field_annotations(
+        descriptors, classvar_attrs, inherited_redeclared = process_field_annotations(
             annotations, namespace, module, cls, parent_classvars, skip=MUTOBJ_INFRA_ATTRS,
         )
         attr_registry: dict[str, Any] = {}
@@ -86,13 +90,13 @@ class ExtensionMeta(type):
         # 登记到 ext_meta_cache，使 fields(cls) / validate_construction_fields
         # 能看到 Extension 子类的字段。
         if attr_registry:
-            mc = ExtensionClassMeta(fields=attr_registry)
+            mc = ExtensionClassMeta(fields=attr_registry, classvars=classvar_attrs)
             ext_meta_cache[cls] = mc
             mutobj_meta_cache[cls] = mc
             get_ordered_descriptors(cls, mc)
             bump_registry_generation()
         else:
-            mc = ExtensionClassMeta()
+            mc = ExtensionClassMeta(classvars=classvar_attrs)
             ext_meta_cache[cls] = mc
             mutobj_meta_cache[cls] = mc
 
@@ -104,7 +108,20 @@ class ExtensionMeta(type):
                 cast(type[Extension[Any]], cls),
             )
 
+        # 类级别严格化：拒绝渠道 A（namespace → cls.__dict__）中
+        # 未被 process_field_annotations 处理的无 annotation 数据属性。
+        validate_class_namespace(cls, skip=MUTOBJ_INFRA_ATTRS)
+
         return cls
+
+    def __setattr__(cls, name: str, value: Any) -> None:
+        if isinstance(value, AttributeDescriptor):
+            validate_field_descriptor(cls.__name__, value)
+            type.__setattr__(cls, name, value)
+            return
+
+        validate_class_setattr(cls, name, value)
+        type.__setattr__(cls, name, value)
 
 
 class Extension(Generic[T], metaclass=ExtensionMeta):

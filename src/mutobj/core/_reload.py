@@ -33,11 +33,9 @@ def update_class_inplace(existing: type, new_cls: type) -> None:
     for attr in new_attrs - _skip:
         val = new_cls.__dict__[attr]
         try:
-            old_val = existing.__dict__.get(attr)
-            if isinstance(old_val, AttributeDescriptor) and not isinstance(val, AttributeDescriptor):
-                type.__setattr__(existing, attr, val)
-            else:
-                setattr(existing, attr, val)
+            # 统一走 type.__setattr__，绕过 metaclass __setattr__ 严格化校验。
+            # 新类已通过完整校验，reload 是可信内部元操作。
+            type.__setattr__(existing, attr, val)
         except (AttributeError, TypeError):
             pass
 
