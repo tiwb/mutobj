@@ -177,7 +177,7 @@ class TestImplMetaChainTopSemantics:
         assert mutobj.impl_meta(Svc.run) == ()
 
     def test_unregister_clears_meta(self) -> None:
-        """unregister_module_impls 应清除对应 meta。"""
+        """impl_unregister 应清除对应 meta。"""
         class Svc(mutobj.Declaration):
             def run(self) -> int: ...
 
@@ -189,7 +189,7 @@ class TestImplMetaChainTopSemantics:
         mutobj.impl(Svc.run, Stub())(_impl_fn)
 
         assert mutobj.impl_meta_of(Svc.run, Stub) is not None
-        mutobj.unregister_module_impls("test_impl_meta_synthetic_unreg")
+        mutobj.impl_unregister("test_impl_meta_synthetic_unreg")
         # 卸载后链回到默认实现，meta 也应清空
         assert mutobj.impl_meta(Svc.run) == ()
 

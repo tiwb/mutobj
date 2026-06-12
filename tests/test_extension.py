@@ -598,7 +598,6 @@ class TestExtensionFieldSystem:
         assert ext.shared == 99
         assert HostExt.shared == 99
         assert ext.instance_field == 0
-        # ClassVar 不在 cls.__dict__ 里成为 AttributeDescriptor。
-        from mutobj.core._fields import AttributeDescriptor
-        assert not isinstance(HostExt.__dict__.get("shared"), AttributeDescriptor)
-        assert isinstance(HostExt.__dict__.get("instance_field"), AttributeDescriptor)
+        # ClassVar 不作为字段；实例字段在 fields 中
+        assert "shared" not in mutobj.fields(HostExt)
+        assert "instance_field" in mutobj.fields(HostExt)

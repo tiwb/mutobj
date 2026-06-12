@@ -5,7 +5,7 @@ from __future__ import annotations
 import asyncio
 import pytest
 import mutobj
-from mutobj import unregister_module_impls
+from mutobj import impl_unregister
 
 
 def _make_module(module_name: str) -> dict:
@@ -46,8 +46,8 @@ class TestBasicChain:
         try:
             assert Svc().run(3) == 40  # (3+1)*10
         finally:
-            unregister_module_impls("super_two_mod_a")
-            unregister_module_impls("super_two_mod_b")
+            impl_unregister("super_two_mod_a")
+            impl_unregister("super_two_mod_b")
 
     def test_three_level_super(self):
         class Svc(mutobj.Declaration):
@@ -77,7 +77,7 @@ class TestBasicChain:
                 "super_three_mod_b",
                 "super_three_mod_c",
             ):
-                unregister_module_impls(name)
+                impl_unregister(name)
 
 
 # ---------- 错误场景 ----------
@@ -108,7 +108,7 @@ class TestErrors:
             with pytest.raises(NotImplementedError):
                 Svc().run()
         finally:
-            unregister_module_impls("super_bottom_mod")
+            impl_unregister("super_bottom_mod")
 
     def test_super_outside_impl_context_raises(self):
         class Svc(mutobj.Declaration):
@@ -128,7 +128,7 @@ class TestErrors:
             with pytest.raises(RuntimeError, match="must be called from within"):
                 mutobj.impl_call_super(Svc.run, Svc())
         finally:
-            unregister_module_impls("super_outside_mod")
+            impl_unregister("super_outside_mod")
 
     def test_super_with_unknown_method_raises(self):
         class Svc(mutobj.Declaration):
@@ -169,8 +169,8 @@ class TestSameName:
         try:
             assert Svc().run() == "AB"
         finally:
-            unregister_module_impls("super_homonym_mod_a")
-            unregister_module_impls("super_homonym_mod_b")
+            impl_unregister("super_homonym_mod_a")
+            impl_unregister("super_homonym_mod_b")
 
 
 # ---------- async ----------
@@ -204,8 +204,8 @@ class TestAsync:
             result = asyncio.run(Svc().fetch(5))
             assert result == 11  # 5*2 + 1
         finally:
-            unregister_module_impls("super_async_mod_a")
-            unregister_module_impls("super_async_mod_b")
+            impl_unregister("super_async_mod_a")
+            impl_unregister("super_async_mod_b")
 
 
 # ---------- property ----------
@@ -240,8 +240,8 @@ class TestProperty:
         try:
             assert Product(name="widget").display_name == "[WIDGET]"
         finally:
-            unregister_module_impls("super_prop_mod_a")
-            unregister_module_impls("super_prop_mod_b")
+            impl_unregister("super_prop_mod_a")
+            impl_unregister("super_prop_mod_b")
 
     def test_property_setter_super(self):
         class Counter(mutobj.Declaration):
@@ -280,9 +280,9 @@ class TestProperty:
             c.value = 5
             assert c.value == 105
         finally:
-            unregister_module_impls("super_propset_mod_a")
-            unregister_module_impls("super_propset_mod_b")
-            unregister_module_impls(__name__)
+            impl_unregister("super_propset_mod_a")
+            impl_unregister("super_propset_mod_b")
+            impl_unregister(__name__)
 
 
 # ---------- classmethod / staticmethod ----------
@@ -315,8 +315,8 @@ class TestClassmethodStaticmethod:
         try:
             assert Svc.make(3) == 40
         finally:
-            unregister_module_impls("super_cm_mod_a")
-            unregister_module_impls("super_cm_mod_b")
+            impl_unregister("super_cm_mod_a")
+            impl_unregister("super_cm_mod_b")
 
     def test_staticmethod_super(self):
         class Svc(mutobj.Declaration):
@@ -344,8 +344,8 @@ class TestClassmethodStaticmethod:
         try:
             assert Svc.calc(3) == 40
         finally:
-            unregister_module_impls("super_sm_mod_a")
-            unregister_module_impls("super_sm_mod_b")
+            impl_unregister("super_sm_mod_a")
+            impl_unregister("super_sm_mod_b")
 
 
 # ---------- 卸载中间层 ----------
@@ -376,10 +376,10 @@ class TestUnregisterMiddle:
             assert Svc().run(3) == 108
 
             # 卸载 B 后链变为 A→C
-            unregister_module_impls("super_unreg_mod_b")
+            impl_unregister("super_unreg_mod_b")
             # x=3 → A=4 → C=104
             assert Svc().run(3) == 104
         finally:
-            unregister_module_impls("super_unreg_mod_a")
-            unregister_module_impls("super_unreg_mod_b")
-            unregister_module_impls("super_unreg_mod_c")
+            impl_unregister("super_unreg_mod_a")
+            impl_unregister("super_unreg_mod_b")
+            impl_unregister("super_unreg_mod_c")

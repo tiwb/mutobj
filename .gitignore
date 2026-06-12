@@ -31,6 +31,7 @@ wheels/
 htmlcov/
 .tox/
 .nox/
+coverage*.json
 
 # Type checking
 .mypy_cache/

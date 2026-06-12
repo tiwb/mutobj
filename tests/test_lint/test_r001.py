@@ -188,6 +188,21 @@ class TestR001Decorators:
         """)
         assert lint_file(f) == []
 
+    def test_async_overload_excluded(self, tmp_path: Path) -> None:
+        """@overload 装饰的 async def 从判定中剔除"""
+        pkg = make_pkg(tmp_path)
+        f = write(pkg, "impl.py", """
+            from typing import overload
+            from mutobj import Declaration
+
+            class Foo(Declaration):
+                @overload
+                async def fetch(self, url: str) -> dict: ...
+                async def fetch(self, url):
+                    return {}
+        """)
+        assert lint_file(f) == []
+
     def test_typing_overload_qualified(self, tmp_path: Path) -> None:
         pkg = make_pkg(tmp_path)
         f = write(pkg, "impl.py", """
@@ -774,6 +789,260 @@ class TestR001YieldStub:
 
 
 # ============================================================ Dogfooding
+
+
+# ============================================================ R001: Resolver 边界情况
+
+
+class TestR001ResolverEdgeCases:
+    """Resolver 循环引用 / __init__.py 模块 / 跨包不可解析"""
+
+    def test_circular_cross_file_import_no_infinite_loop(
+        self, tmp_path: Path,
+    ) -> None:
+        """A 继承 B，B 继承 A → 解析器不挂死，保守不报警"""
+        pkg = make_pkg(tmp_path)
+        write(pkg, "a.py", """
+            from mutobj import Declaration
+            from pkg.b import B
+
+            class A(B):
+                def stub(self): ...
+                def impl(self):
+                    return 1
+        """)
+        write(pkg, "b.py", """
+            from mutobj import Declaration
+            from pkg.a import A
+
+            class B(A):
+                def stub(self): ...
+        """)
+        # 不应挂死
+        msgs = lint_directory(pkg)
+        # 循环引用时两者都无法确认是 Declaration 子类 → 保守不报警
+        assert msgs == []
+
+    def test_init_py_as_target_module(
+        self, tmp_path: Path,
+    ) -> None:
+        """跨文件继承，基类在另一个包（__init__.py）中"""
+        # sub/pkg1/__init__.py 定义 Base → sub/pkg2/mod.py 继承
+        sub = tmp_path / "sub"
+        sub.mkdir()
+        pkg1 = sub / "pkg1"
+        pkg1.mkdir()
+        (pkg1 / "__init__.py").write_text("""
+            from mutobj import Declaration
+
+            class Base(Declaration):
+                def method(self) -> str: ...
+        """, encoding="utf-8")
+        pkg2 = sub / "pkg2"
+        pkg2.mkdir()
+        (pkg2 / "__init__.py").write_text("", encoding="utf-8")
+        f = write(pkg2, "mod.py", """
+            from sub.pkg1 import Base
+
+            class Derived(Base):
+                def method(self) -> str: ...
+        """)
+        msgs = lint_file(f)
+        assert msgs == []
+
+    def test_mutobj_non_declaration_name_not_mistaken(
+        self, tmp_path: Path,
+    ) -> None:
+        """from mutobj import UNSET 后继承 UNSET → 不被误判为 Declaration 子类"""
+        pkg = make_pkg(tmp_path)
+        f = write(pkg, "ambig.py", """
+            from mutobj import UNSET
+
+            class Foo(UNSET):
+                def stub(self): ...
+                def impl(self):
+                    return 1
+        """)
+        # 基类不是 Declaration → 不报警
+        assert lint_file(f) == []
+
+    def test_target_module_mutobj_non_declaration(
+        self, tmp_path: Path,
+    ) -> None:
+        """import mutobj; class Foo(mutobj.UNSET) 不被误判"""
+        pkg = make_pkg(tmp_path)
+        f = write(pkg, "ambig.py", """
+            import mutobj
+
+            class Foo(mutobj.UNSET):
+                def stub(self): ...
+                def impl(self):
+                    return 1
+        """)
+        assert lint_file(f) == []
+
+    def test_import_whole_module_target_name_none(
+        self, tmp_path: Path,
+    ) -> None:
+        """import xxx; class Foo(xxx.Cls) 中 target_name=None → 不误判"""
+        pkg = make_pkg(tmp_path)
+        write(pkg, "base.py", """
+            class SomeBase:
+                pass
+        """)
+        f = write(pkg, "user.py", """
+            import pkg.base
+
+            class Foo(pkg.base.SomeBase):
+                def stub(self): ...
+                def impl(self):
+                    return 1
+        """)
+        assert lint_file(f) == []
+
+    def test_import_as_alias_target_name_none(
+        self, tmp_path: Path,
+    ) -> None:
+        """import pkg.x as m; class Foo(m) → target_name=None 路径"""
+        pkg = make_pkg(tmp_path)
+        write(pkg, "base.py", """
+            class SomeBase:
+                pass
+        """)
+        f = write(pkg, "user.py", """
+            import pkg.base as base_mod
+            from mutobj import Declaration
+
+            class Foo(base_mod):
+                def stub(self): ...
+                def impl(self):
+                    return 1
+        """)
+        # base_mod 不是 Declaration 子类 → 不报警
+        assert lint_file(f) == []
+
+    def test_unimported_name_base_not_detected(
+        self, tmp_path: Path,
+    ) -> None:
+        """基类 Name 不在 imports 中 → 不误判"""
+        pkg = make_pkg(tmp_path)
+        f = write(pkg, "ambig.py", """
+            class Foo(UnknownBase):
+                def stub(self): ...
+                def impl(self):
+                    return 1
+        """)
+        assert lint_file(f) == []
+
+    def test_attribute_base_non_name_chain(
+        self, tmp_path: Path,
+    ) -> None:
+        """基类 Attribute 链不是以 Name 开头 → 不误判"""
+        pkg = make_pkg(tmp_path)
+        f = write(pkg, "ambig.py", """
+            class Foo(getattr(mod, "Base")):
+                def stub(self): ...
+                def impl(self):
+                    return 1
+        """)
+        assert lint_file(f) == []
+
+    def test_cross_package_different_top_package(
+        self, tmp_path: Path,
+    ) -> None:
+        """跨顶层包 import → 保守不报警"""
+        # pkg1 和 pkg2 是两个独立的顶层包
+        pkg1_root = tmp_path / "src1"
+        pkg1 = make_pkg(pkg1_root, "pkg1")
+        write(pkg1, "base.py", """
+            from mutobj import Declaration
+
+            class Base(Declaration):
+                def m(self) -> str: ...
+        """)
+        pkg2_root = tmp_path / "src2"
+        pkg2 = make_pkg(pkg2_root, "pkg2")
+        f = write(pkg2, "user.py", """
+            from pkg1.base import Base
+
+            class Foo(Base):
+                def m(self) -> str: ...
+                def impl(self):
+                    return 1
+        """)
+        # 跨顶层包无法解析 → 保守不报警
+        assert lint_file(f) == []
+
+    def test_non_package_file_top_package_none(
+        self, tmp_path: Path,
+    ) -> None:
+        """文件不在任何包内 → top_package=None → 跨文件解析跳过"""
+        d = tmp_path / "scripts"
+        d.mkdir()
+        write(d, "base.py", """
+            from mutobj import Declaration
+
+            class Base(Declaration):
+                def m(self) -> str: ...
+        """)
+        f = write(d, "user.py", """
+            from base import Base
+
+            class Foo(Base):
+                def m(self) -> str: ...
+                def impl(self):
+                    return 1
+        """)
+        # 非包目录 → 不报警
+        assert lint_file(f) == []
+
+    def test_module_not_start_with_top_package(
+        self, tmp_path: Path,
+    ) -> None:
+        """import 的模块不以顶层包开头 → 不解析"""
+        pkg = make_pkg(tmp_path)
+        f = write(pkg, "user.py", """
+            import os
+
+            class Foo(os.PathLike):
+                def stub(self): ...
+                def impl(self):
+                    return 1
+        """)
+        assert lint_file(f) == []
+
+
+class TestR001InitPyModule:
+    """跨文件继承时目标模块是包 __init__.py 的场景"""
+
+    def test_cross_file_to_package_init_py(
+        self, tmp_path: Path,
+    ) -> None:
+        """
+        from sub_pkg import Base → 目标在 sub_pkg/__init__.py
+        解析器需找到 __init__.py（candidate2 路径）
+        """
+        sub_pkg = tmp_path / "sub_pkg"
+        sub_pkg.mkdir()
+        (sub_pkg / "__init__.py").write_text("""
+            from mutobj import Declaration
+
+            class Base(Declaration):
+                def method(self) -> str: ...
+        """, encoding="utf-8")
+        # 为了有顶层包上下文，需要在 sub_pkg/ 上级放一个占位
+        # 创建另一个包来 import
+        outer_pkg = tmp_path / "outer"
+        outer_pkg.mkdir()
+        (outer_pkg / "__init__.py").write_text("", encoding="utf-8")
+        f = write(outer_pkg, "submod.py", """
+            from sub_pkg import Base
+
+            class Derived(Base):
+                def method(self) -> str: ...
+        """)
+        msgs = lint_file(f)
+        assert msgs == []
 
 
 class TestDogfooding:

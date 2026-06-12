@@ -2,7 +2,6 @@
 
 import pytest
 import mutobj
-from mutobj.core._classmeta import decl_meta_cache
 
 class TestClassmethodDeclaration:
     """测试 classmethod 声明"""
@@ -15,8 +14,12 @@ class TestClassmethodDeclaration:
                 """创建实例"""
                 ...
 
-        declared = decl_meta_cache[Factory].classmethods
-        assert "create" in declared
+        @mutobj.impl(Factory.create)
+        def create(cls) -> "Factory":
+            return cls()
+        instance = Factory.create()
+        # classmethod @impl 行为正常：返回实例
+        assert isinstance(instance, Factory)
 
     def test_default_classmethod_runs_without_error(self):
         """测试默认 classmethod 实现直接执行，不抛出异常"""
@@ -79,8 +82,11 @@ class TestStaticmethodDeclaration:
                 """辅助函数"""
                 ...
 
-        declared = decl_meta_cache[Utils].staticmethods
-        assert "helper" in declared
+        @mutobj.impl(Utils.helper)
+        def helper(x: int) -> int:
+            return x + 1
+        # staticmethod @impl 行为正常
+        assert Utils.helper(1) == 2
 
     def test_default_staticmethod_runs_without_error(self):
         """测试默认 staticmethod 实现直接执行，不抛出异常"""

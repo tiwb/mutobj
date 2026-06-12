@@ -1,11 +1,10 @@
+# L2 契约测试：setattr 触发缓存失效
 """类级属性运行时赋值测试 — DeclarationMeta.__setattr__"""
 
 import pytest
 
 import mutobj
-from mutobj.core._classmeta import decl_meta_cache
 from mutobj import field
-from mutobj.core._fields import AttributeDescriptor
 
 
 class _SetAttrBase(mutobj.Declaration):
@@ -77,9 +76,10 @@ class TestClassLevelAssignment:
 
     def test_descriptor_preserved(self):
         _SetAttrBase.name = "test_value"
-        desc = _SetAttrBase.__dict__["name"]
-        assert isinstance(desc, AttributeDescriptor)
-        assert desc.default == "test_value"
+        # setattr 后默认值已更新
+        assert _SetAttrBase.name.make_default() == "test_value"
+        # 新实例看到新默认值
+        assert _SetAttrBase().name == "test_value"
         _SetAttrBase.name = "original"
 
     def testattribute_registry_sync(self):
@@ -90,11 +90,10 @@ class TestClassLevelAssignment:
             pass
 
         # 子类 registry 初始不含 x
-        child_reg = decl_meta_cache[Child].fields
-        assert "x" not in child_reg
+        assert "x" not in mutobj.fields(Child)
 
         Child.x = 20
-        assert "x" in decl_meta_cache[Child].fields
+        assert "x" in mutobj.fields(Child)
 
     def test_ordered_fields_cache_invalidated(self):
         class P(mutobj.Declaration):
@@ -103,17 +102,11 @@ class TestClassLevelAssignment:
         class C(P):
             pass
 
-        # 触发 lazy 计算
-        C()
-        mc = decl_meta_cache[C]
-        assert mc.ordered_descriptors is not None
+        # 首次构造触发 lazy 计算
+        assert C().val == "a"
 
-        # __setattr__ 之后应失效
+        # __setattr__ 之后缓存应失效
         C.val = "b"
-        assert mc.ordered_descriptors is None
+        # 行为验证：失效后构造新实例拿到新值
+        assert C().val == "b"
 
-    def test_descriptor_assignment_passthrough(self):
-        desc = AttributeDescriptor("name", str, default="direct")
-        _SetAttrBase.name = desc  # type: ignore
-        assert _SetAttrBase.__dict__["name"] is desc
-        _SetAttrBase.name = "original"

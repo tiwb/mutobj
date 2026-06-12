@@ -2,7 +2,6 @@
 
 import pytest
 import mutobj
-from mutobj.core._classmeta import decl_meta_cache
 
 
 class TestImplDecorator:
@@ -34,13 +33,11 @@ class TestImplDecorator:
         def count(self: Counter) -> int:
             return 42
 
-        key = (Counter, "count")
-        assert key[1] in decl_meta_cache[key[0]].impl_chains
-        chain = decl_meta_cache[key[0]].impl_chains[key[1]]
         # 链中应有默认实现和外部实现
+        chain = mutobj.impl_chain(Counter.count)
         assert len(chain) >= 2
-        # 链顶应为外部实现
-        assert chain[-1].func is count
+        # 外部实现为活跃实现
+        assert Counter().count() == 42
 
     def test_different_module_impl_overrides(self):
         """测试不同模块实现自动覆盖（后注册者成为活跃实现）"""

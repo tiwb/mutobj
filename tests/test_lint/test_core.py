@@ -6,7 +6,7 @@ from pathlib import Path
 
 import pytest
 
-from mutobj.lint import LintMessage, lint_directory
+from mutobj.lint import LintMessage, lint_directory, lint_file
 
 from ._helpers import make_pkg, write
 
@@ -81,6 +81,102 @@ class TestLintDirectory:
 
 
 # ============================================================ LintMessage
+
+
+# ============================================================ lint_file 边界
+
+
+class TestLintFileEdgeCases:
+    """lint_file 边界输入：非 .py 文件 / 语法错误 / 读错误 / 非包目录"""
+
+    def test_non_python_file_returns_empty(self, tmp_path: Path) -> None:
+        """.txt 文件 → 返回 []"""
+        f = tmp_path / "data.txt"
+        f.write_text("not python", encoding="utf-8")
+        assert lint_file(f) == []
+
+    def test_syntax_error_returns_empty(self, tmp_path: Path) -> None:
+        """语法错误的 .py 文件 → 返回 []"""
+        f = tmp_path / "broken.py"
+        f.write_text("def foo(\n", encoding="utf-8")
+        assert lint_file(f) == []
+
+    def test_oserror_returns_empty(self, tmp_path: Path) -> None:
+        """读取 OSError → 返回 []"""
+        from unittest.mock import patch
+
+        pkg = make_pkg(tmp_path)
+        f = write(pkg, "unreadable.py", """
+            class X: pass
+        """)
+        with patch("pathlib.Path.read_text", side_effect=OSError("permission denied")):
+            assert lint_file(f) == []
+
+    def test_non_package_dir_no_crash(self, tmp_path: Path) -> None:
+        """没有 __init__.py 的目录中 lint_file 不崩溃"""
+        d = tmp_path / "scripts"
+        d.mkdir()
+        f = d / "main.py"
+        # 普通类，非 Declaration 子类
+        f.write_text("class Plain: pass", encoding="utf-8")
+        assert lint_file(f) == []
+
+
+class TestLintDirectoryFileArg:
+    """lint_directory 传入文件路径（非目录）"""
+
+    def test_single_file_arg_scans_file(self, tmp_path: Path) -> None:
+        """lint_directory 传入单个 .py 文件也能扫描"""
+        pkg = make_pkg(tmp_path)
+        f = write(pkg, "bad.py", """
+            from mutobj import Declaration
+            class B(Declaration):
+                def stub(self): ...
+                def impl(self):
+                    return 1
+        """)
+        msgs = lint_directory(f)
+        assert len(msgs) > 0
+        assert any("bad.py" in m.path for m in msgs)
+
+    def test_non_py_file_arg_returns_empty(self, tmp_path: Path) -> None:
+        """lint_directory 传入非 .py 文件 → 返回 []"""
+        f = tmp_path / "readme.md"
+        f.write_text("# hello", encoding="utf-8")
+        assert lint_directory(f) == []
+
+
+class TestLintDirectoryEdgeCases:
+    """lint_directory 扫描中的边界文件"""
+
+    def test_underscore_underscore_impl_stem_empty_skipped(
+        self, tmp_path: Path,
+    ) -> None:
+        """__impl.py 文件 stem 为空 → _scan_impl_pairs 跳过"""
+        pkg = make_pkg(tmp_path)
+        write(pkg, "__impl.py", "")
+        write(pkg, "legit.py", """
+            from mutobj import Declaration
+            class A(Declaration):
+                def m(self): ...
+        """)
+        # 不应崩溃或误报
+        msgs = lint_directory(pkg)
+        assert msgs == []
+
+    def test_double_underscore_impl_prefix_not_matched(
+        self, tmp_path: Path,
+    ) -> None:
+        """___impl.py 不匹配 _*_impl.py 模式（fn[1:-8] 方式）"""
+        pkg = make_pkg(tmp_path)
+        write(pkg, "___impl.py", "")
+        write(pkg, "ok.py", """
+            from mutobj import Declaration
+            class A(Declaration):
+                def m(self): ...
+        """)
+        msgs = lint_directory(pkg)
+        assert msgs == []
 
 
 class TestLintMessage:

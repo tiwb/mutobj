@@ -1,11 +1,12 @@
 """Tests for resolve_class."""
 
 import sys
+import tempfile
 import types
+from pathlib import Path
 
 import pytest
 import mutobj
-from mutobj.core._discovery import class_registry
 
 
 # 模块级 Declaration 子类，用于全路径测试
@@ -98,8 +99,6 @@ class AutoImported(mutobj.Declaration):
             assert result is mod.__dict__["AutoImported"]
         finally:
             sys.modules.pop(mod_name, None)
-            key = (mod_name, "AutoImported")
-            class_registry.pop(key, None)
 
     def test_resolve_full_path_import_error(self):
         """import 失败时抛出 ValueError"""
@@ -110,6 +109,48 @@ class AutoImported(mutobj.Declaration):
         """模块存在但类不在其中时抛出 ValueError"""
         with pytest.raises(ValueError, match="Cannot resolve class"):
             mutobj.resolve_class("os.path.NoSuchDeclaration", mutobj.Declaration)
+
+    def test_resolve_auto_import_via_file(self):
+        """全路径指向磁盘文件时，自动 import 并解析（行 52, 57 覆盖）"""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            mod_name = "_test_auto_import_file_mod"
+            code = (
+                "import mutobj\n"
+                "class AutoImportedFile(mutobj.Declaration):\n"
+                "    def run(self) -> str: ...\n"
+            )
+            Path(tmpdir, f"{mod_name}.py").write_text(code)
+            sys.path.insert(0, tmpdir)
+            try:
+                result = mutobj.resolve_class(
+                    f"{mod_name}.AutoImportedFile", mutobj.Declaration
+                )
+                assert result.__name__ == "AutoImportedFile"
+            finally:
+                sys.path.remove(tmpdir)
+                sys.modules.pop(mod_name, None)
+
+    def test_resolve_auto_import_base_cls_mismatch(self):
+        """auto import 成功后 base_cls 不匹配时抛出 ValueError（行 53-56 覆盖）"""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            mod_name = "_test_auto_import_mismatch_mod"
+            code = (
+                "import mutobj\n"
+                "class AutoMismatch(mutobj.Declaration):\n"
+                "    def run(self) -> str: ...\n"
+            )
+            Path(tmpdir, f"{mod_name}.py").write_text(code)
+            sys.path.insert(0, tmpdir)
+            try:
+                class UnrelatedBase(mutobj.Declaration):
+                    def run(self) -> str: ...
+                with pytest.raises(ValueError, match="not a subclass"):
+                    mutobj.resolve_class(
+                        f"{mod_name}.AutoMismatch", base_cls=UnrelatedBase
+                    )
+            finally:
+                sys.path.remove(tmpdir)
+                sys.modules.pop(mod_name, None)
 
     def test_resolve_full_path_with_base_cls(self):
         """全路径 + base_cls 校验"""

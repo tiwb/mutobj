@@ -1,7 +1,8 @@
 """Tests for discover_subclasses and get_registry_generation."""
 
+import pytest
 import mutobj
-from mutobj.core._discovery import class_registry
+from mutobj._testing import unregister_class
 
 
 class TestDiscoverSubclasses:
@@ -54,6 +55,7 @@ class TestDiscoverSubclasses:
         assert Base not in result
         assert Child in result
 
+    @pytest.mark.l2("unregister 后 discover 不再返回")
     def test_discover_after_unregister(self):
         """模块卸载后，通过从 class_registry 移除类来验证不再被发现"""
         class Base2(mutobj.Declaration):
@@ -65,14 +67,9 @@ class TestDiscoverSubclasses:
         assert Sub2 in mutobj.discover_subclasses(Base2)
 
         # 模拟模块卸载：从 registry 中移除 Sub2
-        key_to_remove = None
-        for key, cls in class_registry.items():
-            if cls is Sub2:
-                key_to_remove = key
-                break
-        assert key_to_remove is not None
-        del class_registry[key_to_remove]
+        unregister_class(Sub2)
 
+        # 端到端验证：unregister 后公开 API discover_subclasses 不再返回该类
         assert Sub2 not in mutobj.discover_subclasses(Base2)
 
     def test_discover_non_declaration(self):
@@ -118,7 +115,7 @@ class TestGetRegistryGeneration:
         mutobj.impl(Svc2.run)(run_impl)
 
         gen_before = mutobj.get_registry_generation()
-        removed = mutobj.unregister_module_impls("fake_module_for_gen_test")
+        removed = mutobj.impl_unregister("fake_module_for_gen_test")
         gen_after = mutobj.get_registry_generation()
 
         assert removed >= 1
@@ -155,7 +152,7 @@ class TestGetRegistryGeneration:
     def test_generation_no_increment_on_empty_unregister(self):
         """卸载不存在的模块不递增 generation"""
         gen_before = mutobj.get_registry_generation()
-        removed = mutobj.unregister_module_impls("nonexistent.module.xyz.gen")
+        removed = mutobj.impl_unregister("nonexistent.module.xyz.gen")
         gen_after = mutobj.get_registry_generation()
 
         assert removed == 0

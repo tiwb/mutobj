@@ -17,13 +17,17 @@ class TestPropertyDeclaration:
                 """显示名称"""
                 ...
 
-        from mutobj.core._fields import AttributeDescriptor
-
-        desc = User.__dict__["display_name"]
-        assert isinstance(desc, AttributeDescriptor)
-        assert desc.has_storage is False
-        assert desc.readonly is True
+        # property 不是普通字段
+        assert "display_name" not in mutobj.fields(User)
         assert list(mutobj.fields(User).keys()) == ["name"]
+
+        # property 只读
+        u = User(name="test")
+        with pytest.raises(AttributeError):
+            u.display_name = "x"
+
+        # property getter 正常工作
+        assert u.display_name is None
 
     def test_default_property_getter_runs(self):
         """测试默认 property getter（方法体为 ...）直接执行"""

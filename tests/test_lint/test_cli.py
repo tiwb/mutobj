@@ -332,6 +332,34 @@ exclude = ["tests"]
         assert include == ["src", "lib"]
         assert exclude == ["tests"]
 
+    def test_load_config_broken_toml(
+        self, tmp_path: Path,
+    ) -> None:
+        """损坏的 TOML → 返回空配置，不崩溃"""
+        pyproject = tmp_path / "pyproject.toml"
+        pyproject.write_text("this is not valid toml [[[\n", encoding="utf-8")
+        with patch.object(Path, "cwd", return_value=tmp_path):
+            include, exclude = _load_mutobj_lint_config()
+        assert include == []
+        assert exclude == []
+
+    def test_load_config_broken_toml_cli_fallback(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture[str],
+    ) -> None:
+        """损坏的 TOML + CLI 无参数 → fallback 到 cwd"""
+        pkg = make_pkg(tmp_path)
+        write(pkg, "ok.py", """
+            from mutobj import Declaration
+            class A(Declaration):
+                def m(self): ...
+        """)
+        pyproject = tmp_path / "pyproject.toml"
+        pyproject.write_text("invalid[[[\n", encoding="utf-8")
+        with patch.object(Path, "cwd", return_value=tmp_path):
+            rc = cli_main([])
+            _ = capsys.readouterr()
+        assert rc == 0
+
     def test_load_config_partial(
         self, tmp_path: Path,
     ) -> None:

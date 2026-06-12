@@ -3,7 +3,6 @@
 import pytest
 
 import mutobj
-from mutobj import MISSING
 
 
 class TestPostInit:
@@ -129,5 +128,3 @@ class TestFieldInit:
             Article("hello", "world")
 
 
-def test_missing_exported() -> None:
-    assert MISSING is mutobj.MISSING

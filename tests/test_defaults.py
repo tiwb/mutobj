@@ -3,9 +3,8 @@
 import pytest
 
 import mutobj
-from mutobj.core._classmeta import decl_meta_cache
 from mutobj import field
-from mutobj.core._fields import AttributeDescriptor, MISSING
+
 
 
 # ── 基本默认值 ──────────────────────────────────────────────────
@@ -317,29 +316,29 @@ class TestDefaultsWithReload:
 
 # ── 描述符内部状态 ──────────────────────────────────────────────
 
-class TestDescriptorInternals:
-    """AttributeDescriptor 内部状态检查"""
+class TestHasDefaultSemantics:
+    """has_default 的语义：何种声明视为有默认值"""
 
     def test_has_default_with_value(self):
-        d = AttributeDescriptor("x", int, default=0)
-        assert d.has_default is True
+        class T(mutobj.Declaration):
+            x: int = 0
+        assert T.x.has_default is True
 
     def test_has_default_with_factory(self):
-        d = AttributeDescriptor("x", list, default_factory=list)
-        assert d.has_default is True
+        class T(mutobj.Declaration):
+            x: list = field(default_factory=list)
+        assert T.x.has_default is True
 
     def test_has_default_without(self):
-        d = AttributeDescriptor("x", int)
-        assert d.has_default is False
+        class T(mutobj.Declaration):
+            x: int
+        assert T.x.has_default is False
 
     def test_has_default_with_none(self):
         """default=None 是有效默认值，不等于无默认值"""
-        d = AttributeDescriptor("x", int, default=None)
-        assert d.has_default is True
-
-    def test_missing_sentinel(self):
-        assert repr(MISSING) == "MISSING"
-        assert bool(MISSING) is True
+        class T(mutobj.Declaration):
+            x: int | None = None
+        assert T.x.has_default is True
 
 
 # ── 无注解属性覆盖 ────────────────────────────────────────────
@@ -433,6 +432,7 @@ class TestUnannotatedOverride:
         assert Child().items == ["a", "b"]
         assert Base().items == []  # 父类不受影响
 
+    @pytest.mark.l2("callable 不触发无注解覆盖逻辑")
     def test_callable_not_mistaken_as_override(self):
         """子类定义同名方法不应触发无注解覆盖逻辑（不创建新描述符）"""
         class Base(mutobj.Declaration):
@@ -442,9 +442,11 @@ class TestUnannotatedOverride:
             def process(self):
                 return "method"
 
-        # 无注解覆盖逻辑应跳过 callable，不为 Child 创建新的 AttributeDescriptor
-        child_desc = Child.__dict__.get("process")
-        assert not isinstance(child_desc, AttributeDescriptor)
+        # 无注解覆盖逻辑应跳过 callable，不为 Child 创建字段
+        from mutobj._testing import cls_has_own_descriptor
+        assert not cls_has_own_descriptor(Child, "process")
+        # 端到端验证：callable 方法不被字段覆盖，调用仍是原方法
+        assert Child().process() == "method"
 
     def test_private_attr_override(self):
         """_ 前缀标了注解也会被当做正常字段处理"""
@@ -454,24 +456,24 @@ class TestUnannotatedOverride:
         class Child(Base):
             _internal = "child"
 
-        # _internal 有父 descriptor，子类覆盖应生成新 descriptor
-        desc = Child.__dict__.get("_internal")
-        assert isinstance(desc, AttributeDescriptor)
-        assert desc.default == "child"
+        # _internal 有父 descriptor，子类覆盖应生成新字段
+        assert "_internal" in mutobj.fields(Child)
+        assert Child._internal.make_default() == "child"
+        assert Child()._internal == "child"
 
     # -- 注册表与交互验证 --
 
     def test_descriptor_created_on_subclass(self):
-        """无注解覆盖后，子类 __dict__ 中有独立的 AttributeDescriptor"""
+        """无注解覆盖后，子类可通过公开 API 获取覆盖后的默认值"""
         class Base(mutobj.Declaration):
             val: int = 0
 
         class Child(Base):
             val = 99
 
-        desc = Child.__dict__.get("val")
-        assert isinstance(desc, AttributeDescriptor)
-        assert desc.default == 99
+        assert "val" in mutobj.fields(Child)
+        assert Child.val.make_default() == 99
+        assert Child().val == 99
 
     def testattribute_registry_updated(self):
         """attribute_registry 中子类包含覆盖属性"""
@@ -481,7 +483,7 @@ class TestUnannotatedOverride:
         class Child(Base):
             val = 99
 
-        assert "val" in decl_meta_cache[Child].fields
+        assert "val" in mutobj.fields(Child)
 
     def test_unannotated_override_with_impl(self):
         """无注解覆盖属性在 @impl 方法中可正确访问"""

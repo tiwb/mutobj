@@ -61,6 +61,17 @@ def migrate_registries(existing: type, new_cls: type) -> None:
 
     existing_meta = decl_meta_cache.get(existing)
     if existing_meta is not None:
+        # 先把 classmethods/staticmethods 合入 existing_meta，
+        # 否则下面的 apply_impl 会因查不到对应集合而用裸函数覆盖 classmethod 描述符。
+        existing_meta.fields = new_meta.fields
+        existing_meta.classvars = new_meta.classvars
+        existing_meta.methods = new_meta.methods
+        existing_meta.classmethods = new_meta.classmethods
+        existing_meta.staticmethods = new_meta.staticmethods
+        existing_meta.impl_class = new_meta.impl_class
+        existing_meta.extensions = new_meta.extensions
+        existing_meta.ordered_descriptors = None
+
         # 合并 impl_chains
         for impl_key, new_chain in new_meta.impl_chains.items():
             existing_chain = existing_meta.impl_chains.get(impl_key, [])
@@ -81,16 +92,6 @@ def migrate_registries(existing: type, new_cls: type) -> None:
             existing_meta.impl_chains[impl_key] = existing_chain
             if existing_chain:
                 apply_impl(existing, impl_key, existing_chain[-1].func)
-
-        # 合并 fields
-        existing_meta.fields = new_meta.fields
-        existing_meta.classvars = new_meta.classvars
-        existing_meta.methods = new_meta.methods
-        existing_meta.classmethods = new_meta.classmethods
-        existing_meta.staticmethods = new_meta.staticmethods
-        existing_meta.impl_class = new_meta.impl_class
-        existing_meta.extensions = new_meta.extensions
-        existing_meta.ordered_descriptors = None
 
     migrate_module_first_seq_for_class(new_cls, existing)
 

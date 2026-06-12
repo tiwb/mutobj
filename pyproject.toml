@@ -56,6 +56,20 @@ python_files = ["test_*.py"]
 python_classes = ["Test*"]
 python_functions = ["test_*"]
 addopts = "-v --tb=short"
+markers = [
+    "l2(contract): L2 契约测试，验证内部状态机 / 失效时机 / 回退路径",
+]
+
+[tool.coverage.run]
+source = ["src/mutobj"]
+branch = true
+
+[tool.coverage.report]
+show_missing = true
+skip_covered = false
+
+[tool.coverage.json]
+show_contexts = true
 
 [tool.pyright]
 pythonVersion = "3.11"

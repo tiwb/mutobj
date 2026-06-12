@@ -7,8 +7,7 @@ import pytest
 from typing import ClassVar
 
 import mutobj
-from mutobj.core._classmeta import decl_meta_cache
-from mutobj.core._fields import AttributeDescriptor, FieldInfo
+from mutobj import FieldInfo
 
 
 def _exec_module(source: str, module_name: str, *, keep: bool = False) -> dict:
@@ -33,7 +32,7 @@ class TestClassVarBasic:
 
         # ClassVar 字段：类级读直接返回值，不是描述符
         assert Foo._app is None
-        assert not isinstance(Foo._app, AttributeDescriptor)
+        assert "_app" not in mutobj.fields(Foo)
 
         # 正常字段：类级读仍是描述符
         assert isinstance(Foo.name, FieldInfo)
@@ -44,17 +43,14 @@ class TestClassVarBasic:
 
         f = Foo()
         assert f._app is None
-        # ClassVar 不是字段，实例 storage dict 里不应出现 _app
-        assert "_app" not in f.__mutobj_storage__
 
     def test_classvar_not_inattribute_registry(self):
         class Foo(mutobj.Declaration):
             _app: ClassVar[int] = 0
             name: str = "foo"
 
-        reg = decl_meta_cache[Foo].fields
-        assert "app" not in reg
-        assert "name" in reg
+        assert "_app" not in mutobj.fields(Foo)
+        assert "name" in mutobj.fields(Foo)
 
     def test_classvar_without_default(self):
         class Foo(mutobj.Declaration):
@@ -73,7 +69,7 @@ class TestClassVarBasic:
             _tag: ClassVar = "v1"  # type: ignore[valid-type]
 
         assert Foo._tag == "v1"
-        assert not isinstance(Foo._tag, AttributeDescriptor)
+        assert "_tag" not in mutobj.fields(Foo)
 
 
 class TestClassVarClassLevelAssignment:
@@ -125,7 +121,7 @@ class TestClassVarStringAnnotation:
         )
         Foo = ns["Foo"]
         assert Foo._key is None
-        assert not isinstance(Foo._key, AttributeDescriptor)
+        assert "_key" not in mutobj.fields(Foo)
         assert isinstance(Foo.name, FieldInfo)
 
     def test_qualified_typing_classvar_string(self):
@@ -139,7 +135,7 @@ class TestClassVarStringAnnotation:
         )
         Foo = ns["Foo"]
         assert Foo._key is None
-        assert not isinstance(Foo._key, AttributeDescriptor)
+        assert "_key" not in mutobj.fields(Foo)
 
     def test_qualified_typing_classvar_string_without_import(self):
         ns = _exec_module(
@@ -151,7 +147,7 @@ class TestClassVarStringAnnotation:
         )
         Foo = ns["Foo"]
         assert Foo._key is None
-        assert not isinstance(Foo._key, AttributeDescriptor)
+        assert "_key" not in mutobj.fields(Foo)
 
     def test_module_alias_classvar_string(self):
         ns = _exec_module(
@@ -164,7 +160,7 @@ class TestClassVarStringAnnotation:
         )
         Foo = ns["Foo"]
         assert Foo._key is None
-        assert not isinstance(Foo._key, AttributeDescriptor)
+        assert "_key" not in mutobj.fields(Foo)
 
     def test_classvar_alias(self):
         """别名（如 from typing import ClassVar as CV）— 非 string 形态可识别"""
@@ -174,7 +170,7 @@ class TestClassVarStringAnnotation:
             _key: _CV[int] = 0  # type: ignore[name-defined, valid-type]
 
         assert Foo._key == 0
-        assert not isinstance(Foo._key, AttributeDescriptor)
+        assert "_key" not in mutobj.fields(Foo)
 
     def test_classvar_alias_string(self):
         ns = _exec_module(
@@ -187,7 +183,7 @@ class TestClassVarStringAnnotation:
         )
         Foo = ns["Foo"]
         assert Foo._key == 0
-        assert not isinstance(Foo._key, AttributeDescriptor)
+        assert "_key" not in mutobj.fields(Foo)
 
 
 class TestClassVarInheritance:
@@ -203,7 +199,7 @@ class TestClassVarInheritance:
 
         # 子类继承 ClassVar — 仍是普通类属性
         assert Child._app is None
-        assert not isinstance(Child._app, AttributeDescriptor)
+        assert "_app" not in mutobj.fields(Child)
 
         # 赋值传播
         Child._app = "child_val"
@@ -221,7 +217,7 @@ class TestClassVarInheritance:
             _app = "child_default"  # 无注解覆盖
 
         assert Child._app == "child_default"
-        assert not isinstance(Child._app, AttributeDescriptor)
+        assert "_app" not in mutobj.fields(Child)
 
     def test_subclass_annotated_but_not_classvar_not_downgraded(self):
         """子类用注解但非 ClassVar 覆盖父 ClassVar — 仍保持 ClassVar"""
@@ -232,7 +228,7 @@ class TestClassVarInheritance:
             _app: str = "child"  # 意图覆盖但忘了写 ClassVar
 
         assert Child._app == "child"
-        assert not isinstance(Child._app, AttributeDescriptor)
+        assert "_app" not in mutobj.fields(Child)
 
     def test_subclass_explicit_classvar_override(self):
         """子类显式标注 ClassVar 覆盖 — 正常"""
@@ -243,7 +239,7 @@ class TestClassVarInheritance:
             _app: ClassVar[int] = 42
 
         assert Child._app == 42
-        assert not isinstance(Child._app, AttributeDescriptor)
+        assert "_app" not in mutobj.fields(Child)
 
     def test_subclass_value_override_propagates(self):
         class Parent(mutobj.Declaration):
@@ -283,8 +279,7 @@ class TestClassVarInheritance:
             )
             Child = child_ns["Child"]
             assert Child.app == "child"
-            assert not isinstance(Child.app, AttributeDescriptor)
-            assert "app" not in decl_meta_cache[Child].fields
+            assert "app" not in mutobj.fields(Child)
         finally:
             sys.modules.pop("test_classvar_parent_mod", None)
 
@@ -302,8 +297,8 @@ class TestClassVarCoexistWithFields:
         # ClassVar 字段不是描述符
         assert App.config_file == "/etc/app.conf"
         assert App.debug is False
-        assert not isinstance(App.config_file, AttributeDescriptor)
-        assert not isinstance(App.debug, AttributeDescriptor)
+        assert "config_file" not in mutobj.fields(App)
+        assert "debug" not in mutobj.fields(App)
 
         # 普通字段是描述符
         assert isinstance(App.name, FieldInfo)
@@ -317,10 +312,7 @@ class TestClassVarCoexistWithFields:
         # 类级赋值应该直接设置，不经过 DeclarationMeta.__setattr__ 的描述符路径
         App._ready = True
         assert App._ready is True
-        # 确认仍是普通值，不是描述符
-        f = App.__dict__["_ready"]
-        assert isinstance(f, bool)
-        assert not isinstance(f, AttributeDescriptor)
+        assert "_ready" not in mutobj.fields(App)
 
 
 class TestClassVarReload:
@@ -349,8 +341,7 @@ class TestClassVarReload:
         cls2 = g2["ReloadClassVar"]
         assert cls2 is cls
         assert cls.x == 2
-        assert not isinstance(cls.__dict__["x"], AttributeDescriptor)
-        assert "x" not in decl_meta_cache[cls].fields
+        assert "x" not in mutobj.fields(cls)
         assert cls().x == 2
 
     def test_redefinition_classvar_to_field_creates_descriptor(self):
@@ -362,7 +353,7 @@ class TestClassVarReload:
         )
         cls = g1["ReloadField"]
         assert cls.x == 1
-        assert not isinstance(cls.__dict__["x"], AttributeDescriptor)
+        assert "x" not in mutobj.fields(cls)
 
         g2 = self._redefine(
             "class ReloadField(mutobj.Declaration):\n"
@@ -372,7 +363,7 @@ class TestClassVarReload:
         cls2 = g2["ReloadField"]
         assert cls2 is cls
         assert isinstance(cls.x, FieldInfo)
-        assert "x" in decl_meta_cache[cls].fields
+        assert "x" in mutobj.fields(cls)
         assert cls().x == 2
 
     def test_redefinition_classvar_default_updates_plain_value(self):

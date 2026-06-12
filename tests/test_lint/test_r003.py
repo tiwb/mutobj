@@ -579,3 +579,228 @@ class TestR003TypePrefix:
         # _bad_view: _ 前缀 → R003a；前缀检查跳过
         assert len(r003) == 1
         assert "_bad_view" in r003[0].message
+
+    def test_underscore_with_type_prefix_strips_underscore(
+        self, tmp_path: Path,
+    ) -> None:
+        """_my_view_get: 去 _ 后已有类型前缀 → 建议名不含额外类型前缀"""
+        pkg = make_pkg(tmp_path)
+        write(pkg, "view.py", """
+            from mutobj import Declaration
+
+            class MyView(Declaration):
+                def get(self) -> str: ...
+        """)
+        write(pkg, "_view_impl.py", """
+            from mutobj import impl
+
+            @impl(MyView.get)
+            def _my_view_get(self) -> str:
+                return "ok"
+        """)
+        msgs = lint_file(pkg / "_view_impl.py")
+        r003 = [m for m in msgs if m.rule_id == "R003"]
+        # R003a: _ 前缀 + 去 _ 后已有 my_view_ 前缀 → 建议名 my_view_get
+        assert len(r003) == 1
+        assert "my_view_get" in r003[0].message
+
+    def test_underscore_without_type_prefix_suggests_both(
+        self, tmp_path: Path,
+    ) -> None:
+        """_get: 同时缺类型前缀 → 建议名含完整 snake_type + stripped"""
+        pkg = make_pkg(tmp_path)
+        write(pkg, "view.py", """
+            from mutobj import Declaration
+
+            class MyView(Declaration):
+                def get(self) -> str: ...
+        """)
+        write(pkg, "_view_impl.py", """
+            from mutobj import impl
+
+            @impl(MyView.get)
+            def _get(self) -> str:
+                return "ok"
+        """)
+        msgs = lint_file(pkg / "_view_impl.py")
+        r003 = [m for m in msgs if m.rule_id == "R003"]
+        # R003a: _ 前缀 + 去 _ 后无类型前缀 → 建议名 my_view_get
+        assert len(r003) == 1
+        assert "my_view_get" in r003[0].message
+
+    def test_non_impl_binding_decorator_skipped(
+        self, tmp_path: Path,
+    ) -> None:
+        """@some_decorator 不在 impl_bindings 中 → 跳过"""
+        pkg = make_pkg(tmp_path)
+        write(pkg, "_test_impl.py", """
+            from mutobj import impl
+
+            @staticmethod
+            def _helper(self) -> None:
+                pass
+        """)
+        # @staticmethod 不是 @impl → R003 不检测
+        assert lint_file(pkg / "_test_impl.py") == []
+
+    def test_missing_type_prefix_without_underscore(
+        self, tmp_path: Path,
+    ) -> None:
+        """R003b：有类型名前缀 → 不报；无类型名前缀 → 单独报"""
+        pkg = make_pkg(tmp_path)
+        write(pkg, "handler.py", """
+            from mutobj import Declaration
+
+            class Handler(Declaration):
+                def run(self) -> None: ...
+                def stop(self) -> None: ...
+        """)
+        write(pkg, "_handler_impl.py", """
+            from mutobj import impl
+
+            @impl(Handler.run)
+            def handler_run(self) -> None:
+                pass
+
+            @impl(Handler.stop)
+            def stop(self) -> None:
+                pass
+        """)
+        msgs = lint_file(pkg / "_handler_impl.py")
+        r003 = [m for m in msgs if m.rule_id == "R003"]
+        # handler_run 合规无 R003；stop 缺前缀 → R003b
+        assert len(r003) == 1
+        assert "stop" in r003[0].message
+        assert "handler" in r003[0].message
+
+    def test_underscore_equals_snake_type_suggests_stripped(
+        self, tmp_path: Path,
+    ) -> None:
+        """_view: 去 _ 后等于 snake_type → 建议名就是 view"""
+        pkg = make_pkg(tmp_path)
+        write(pkg, "view.py", """
+            from mutobj import Declaration
+
+            class View(Declaration):
+                def get(self) -> str: ...
+        """)
+        write(pkg, "_view_impl.py", """
+            from mutobj import impl
+
+            @impl(View.get)
+            def _view(self) -> str:
+                return "ok"
+        """)
+        msgs = lint_file(pkg / "_view_impl.py")
+        r003 = [m for m in msgs if m.rule_id == "R003"]
+        # R003a: _ 前缀 + 去 _ 后是 view == snake_type → 建议名 view
+        assert len(r003) == 1
+        assert r003[0].message
+
+
+class TestR003ExtractTypeName:
+    """_extract_type_name 边界"""
+
+    def test_decorator_arg_non_attribute_skips(
+        self, tmp_path: Path,
+    ) -> None:
+        """@impl(func_call()) → 参数不是 Attribute → _extract_type_name 返回 None"""
+        pkg = make_pkg(tmp_path)
+        write(pkg, "_test_impl.py", """
+            from mutobj import impl
+
+            @impl(getattr(Mod, "attr"))
+            def test_func(self) -> None:
+                pass
+        """)
+        msgs = lint_file(pkg / "_test_impl.py")
+        r003 = [m for m in msgs if m.rule_id == "R003"]
+        # 参数非 Attribute → 跳过 R003b
+        assert r003 == []
+
+    def test_decorator_no_args_skips(
+        self, tmp_path: Path,
+    ) -> None:
+        """@impl() → 无参数 → 跳过"""
+        pkg = make_pkg(tmp_path)
+        write(pkg, "_test_impl.py", """
+            from mutobj import impl
+
+            @impl()
+            def test_func(self) -> None:
+                pass
+        """)
+        msgs = lint_file(pkg / "_test_impl.py")
+        r003 = [m for m in msgs if m.rule_id == "R003"]
+        assert r003 == []
+
+    def test_camel_to_snake_acronym(
+        self, tmp_path: Path,
+    ) -> None:
+        """CamelCase 缩略词结尾如 MCPClient → mcp_client"""
+        pkg = make_pkg(tmp_path)
+        write(pkg, "client.py", """
+            from mutobj import Declaration
+
+            class MCPClient(Declaration):
+                def connect(self) -> None: ...
+        """)
+        write(pkg, "_client_impl.py", """
+            from mutobj import impl
+
+            @impl(MCPClient.connect)
+            def mcp_client_connect(self) -> None:
+                pass
+        """)
+        msgs = lint_file(pkg / "_client_impl.py")
+        r003 = [m for m in msgs if m.rule_id == "R003"]
+        assert r003 == []
+
+    def test_double_cap_name(
+        self, tmp_path: Path,
+    ) -> None:
+        """双大写如 IOError → io_error"""
+        pkg = make_pkg(tmp_path)
+        write(pkg, "_test_impl.py", """
+            from mutobj import impl
+
+            @impl(IOError.__init__)
+            def io_error(self) -> None:
+                pass
+        """)
+        msgs = lint_file(pkg / "_test_impl.py")
+        r003 = [m for m in msgs if m.rule_id == "R003"]
+        # io_error 匹配 snake_case(IOError) → 无 R003b
+        assert r003 == []
+
+    def test_no_impl_import_returns_early(
+        self, tmp_path: Path,
+    ) -> None:
+        """_*_impl.py 文件中无 impl/mutobj import → R003 提前返回"""
+        pkg = make_pkg(tmp_path)
+        write(pkg, "_test_impl.py", """
+            @impl(SomeClass.method)
+            def some_method(self) -> None:
+                pass
+        """)
+        msgs = lint_file(pkg / "_test_impl.py")
+        r003 = [m for m in msgs if m.rule_id == "R003"]
+        # 没有 impl_bindings → R003 跳过
+        assert r003 == []
+
+    def test_non_impl_call_decorator_not_matched(
+        self, tmp_path: Path,
+    ) -> None:
+        """@other_decorator(...) 不在 impl_bindings → 不是 @impl"""
+        pkg = make_pkg(tmp_path)
+        write(pkg, "_test_impl.py", """
+            from mutobj import impl
+
+            @register(SomeClass.method)
+            def _some_method(self) -> None:
+                pass
+        """)
+        msgs = lint_file(pkg / "_test_impl.py")
+        r003 = [m for m in msgs if m.rule_id == "R003"]
+        # register 不在 impl_bindings → impl_call=None → R003 跳过
+        assert r003 == []

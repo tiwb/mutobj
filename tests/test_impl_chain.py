@@ -2,9 +2,7 @@
 
 import pytest
 import mutobj
-from mutobj.core._classmeta import decl_meta_cache
-from mutobj import unregister_module_impls
-from mutobj.core._impls import module_first_seq
+from mutobj import impl_unregister
 
 def _exec_class(source: str, module_name: str = "test_virtual"):
     """Helper: exec source code that defines a class, simulating module re-execution."""
@@ -37,7 +35,7 @@ class TestOverrideChainBasic:
 
         assert s.run() == "B"
 
-        unregister_module_impls("chain_mod_b")
+        impl_unregister("chain_mod_b")
         assert s.run() == "A"
 
     def test_a_b_c_unload_b_c_still_active(self):
@@ -64,7 +62,7 @@ class TestOverrideChainBasic:
         assert s.run() == "C"
 
         # 卸载中间层 B
-        unregister_module_impls("chain2_mod_b")
+        impl_unregister("chain2_mod_b")
         # C 仍为活跃实现
         assert s.run() == "C"
 
@@ -81,13 +79,13 @@ class TestOverrideChainBasic:
         s = Svc3()
         assert s.run() == "A"
 
-        unregister_module_impls("chain3_mod_a")
+        impl_unregister("chain3_mod_a")
         # 恢复默认实现（方法体为 ...，返回 None）
         assert s.run() is None
 
     def test_unload_nonexistent_module_noop(self):
         """卸载不存在的模块 → 无操作"""
-        count = unregister_module_impls("nonexistent_chain_module_xyz")
+        count = impl_unregister("nonexistent_chain_module_xyz")
         assert count == 0
 
 class TestOverrideChainReload:
@@ -175,7 +173,7 @@ class TestOverrideChainReload:
         assert s.run() == "C"
 
         # 卸载 B
-        unregister_module_impls("chain6_mod_b")
+        impl_unregister("chain6_mod_b")
         assert s.run() == "C"  # C 仍活跃
 
         # Reimport B（通过 module_first_seq 复用序号回到原位置）
@@ -188,7 +186,7 @@ class TestOverrideChainReload:
         assert s.run() == "C"
 
         # 卸载 C 后 B 恢复
-        unregister_module_impls("chain6_mod_c")
+        impl_unregister("chain6_mod_c")
         assert s.run() == "B_v2"
 
 class TestDeclarationReloadWithChain:
@@ -249,7 +247,7 @@ class TestDeclarationReloadWithChain:
         assert obj.work() == "impl"
 
         # 卸载外部 impl 后恢复为新默认实现
-        unregister_module_impls("reload_chain_ext_mod")
+        impl_unregister("reload_chain_ext_mod")
         assert obj.work() == "default_v2"
 
     def test_declaration_reload_external_impl_already_unloaded(self):
@@ -271,7 +269,7 @@ class TestDeclarationReloadWithChain:
         assert obj.work() == "impl"
 
         # 卸载外部 impl
-        unregister_module_impls("reload_chain_ext_mod_3")
+        impl_unregister("reload_chain_ext_mod_3")
         assert obj.work() == "default_v1"
 
         # Reload Declaration with new default
@@ -311,7 +309,7 @@ class TestOverrideChainProperty:
 
         assert obj.value == "B"
 
-        unregister_module_impls("prop_chain_mod_b")
+        impl_unregister("prop_chain_mod_b")
         assert obj.value == "A"
 
     def test_property_setter_override_chain(self):
@@ -344,7 +342,7 @@ class TestOverrideChainProperty:
         obj.value = "test"
         assert obj.value == "B:test"
 
-        unregister_module_impls("prop_chain2_mod_b")
+        impl_unregister("prop_chain2_mod_b")
         obj.value = "test"
         assert obj.value == "A:test"
 
@@ -371,7 +369,7 @@ class TestOverrideChainClassmethodStaticmethod:
 
         assert CmSvc.create() == "B"
 
-        unregister_module_impls("cm_chain_mod_b")
+        impl_unregister("cm_chain_mod_b")
         assert CmSvc.create() == "A"
 
     def test_staticmethod_override_chain(self):
@@ -394,7 +392,7 @@ class TestOverrideChainClassmethodStaticmethod:
 
         assert SmSvc.helper() == "B"
 
-        unregister_module_impls("sm_chain_mod_b")
+        impl_unregister("sm_chain_mod_b")
         assert SmSvc.helper() == "A"
 
 class TestDefaultImplVariants:
@@ -442,7 +440,6 @@ class TestDefaultImplVariants:
             def m2(self) -> None: pass
             def m3(self) -> str: return "hello"
 
-        declared = decl_meta_cache[D4].methods
-        assert "m1" in declared
-        assert "m2" in declared
-        assert "m3" in declared
+        assert mutobj.impl_is_own(D4.m1)
+        assert mutobj.impl_is_own(D4.m2)
+        assert mutobj.impl_is_own(D4.m3)

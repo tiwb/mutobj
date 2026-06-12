@@ -63,7 +63,7 @@ class TestImplementationBridge:
         reader = Reader(value=7)
         assert reader.read() == 7
 
-        removed = mutobj.unregister_module_impls(__name__)
+        removed = mutobj.impl_unregister(__name__)
 
         assert removed >= 1
         assert reader.read() is None
@@ -153,7 +153,7 @@ class TestImplementationBridge:
         product = Product(value=5)
         assert product.label == "v=5"
 
-        removed = mutobj.unregister_module_impls(__name__)
+        removed = mutobj.impl_unregister(__name__)
 
         assert removed >= 1
         assert product.label == "default:5"

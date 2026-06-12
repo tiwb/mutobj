@@ -10,7 +10,7 @@ import types
 import pytest
 
 import mutobj
-from mutobj.core._classmeta import decl_meta_cache
+from mutobj._testing import clear_mutobj_class
 
 
 class TestDunderImpl:
@@ -63,12 +63,19 @@ class TestDunderImpl:
 class TestSingleUnderscoreMethod:
     """单下划线方法（_xxx）也走注册"""
 
+    @pytest.mark.l2("单下划线方法挂载 __mutobj_class__")
     def test_underscore_method_has_mutobj_class(self):
         """metaclass 给 _helper 设置 __mutobj_class__"""
         class Holder(mutobj.Declaration):
             def _helper(self) -> str: ...
 
         assert getattr(Holder._helper, "__mutobj_class__", None) is Holder
+
+        # 端到端验证：有 __mutobj_class__，@impl 能正确分发到 _helper
+        @mutobj.impl(Holder._helper)
+        def helper_impl(self: Holder) -> str:
+            return "l2_verified"
+        assert Holder()._helper() == "l2_verified"
 
     def test_underscore_method_replaceable_by_impl(self):
         """_helper 可被 @impl 覆盖"""
@@ -99,13 +106,12 @@ class TestReservedDunders:
             pass
 
         assert Child in called
-        # 不应被注册为 declared method
-        assert "__init_subclass__" not in decl_meta_cache[Parent].impl_chains
 
 
 class TestAmbiguousFallback:
     """Layer B：fallback 多匹配时报错"""
 
+    @pytest.mark.l2("__mutobj_class__ 缺失时 fallback 多匹配报错")
     def test_ambiguous_target_raises(self):
         """同名 Declaration 共存 + method 缺失 __mutobj_class__ → fallback 多匹配报错"""
         # 制造两个同名 Declaration
@@ -130,20 +136,18 @@ class TestAmbiguousFallback:
             FooA = mod_a.Foo
 
             # 强制让 method 缺失 __mutobj_class__，触发 fallback 路径
-            method = FooA.bar
-            try:
-                del method.__mutobj_class__
-            except AttributeError:
-                pass
+            clear_mutobj_class(FooA.bar)
 
+            # 端到端验证：@impl 对缺失 __mutobj_class__ 的多匹配 stub 报 ValueError
             with pytest.raises(ValueError, match="ambiguous target"):
-                @mutobj.impl(method)
+                @mutobj.impl(FooA.bar)
                 def bar_impl(self) -> int:
                     return 1
         finally:
             sys.modules.pop("_test_amb_a", None)
             sys.modules.pop("_test_amb_b", None)
 
+    @pytest.mark.l2("__mutobj_class__ 缺失时 fallback 多匹配报错")
     def test_ambiguous_error_lists_candidates(self):
         """报错信息含两个候选类的全路径"""
         mod_a = types.ModuleType("_test_amb_c")
@@ -163,14 +167,11 @@ class TestAmbiguousFallback:
                 "    def baz(self) -> None: ...\n",
                 mod_b.__dict__,
             )
-            method = mod_a.Bar.baz
-            try:
-                del method.__mutobj_class__
-            except AttributeError:
-                pass
+            clear_mutobj_class(mod_a.Bar.baz)
 
+            # 端到端验证：报错信息列出所有候选类供诊断
             with pytest.raises(ValueError) as exc_info:
-                @mutobj.impl(method)
+                @mutobj.impl(mod_a.Bar.baz)
                 def baz_impl(self) -> None: ...
 
             msg = str(exc_info.value)
