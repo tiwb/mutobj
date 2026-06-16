@@ -327,7 +327,15 @@ def _resolve_impl_key(method: Any) -> tuple[type, str]:
 def impl_has_override(method: Any) -> bool:
     cls, key = _resolve_impl_key(method)
     chain = decl_meta_cache[cls].impl_chains.get(key, [])
-    return any(entry.source_module != "__default__" for entry in chain)
+    if any(entry.source_module != "__default__" for entry in chain):
+        return True
+    # 对 property getter/setter 声明桩也检查 .getter/.setter 键
+    # （声明时 key 为 "name.getter"，但 method 的 __name__ 只有 "name"）
+    for suffix in (".getter", ".setter"):
+        prop_chain = decl_meta_cache[cls].impl_chains.get(key + suffix, [])
+        if any(entry.source_module != "__default__" for entry in prop_chain):
+            return True
+    return False
 
 
 def impl_is_own(method: Any) -> bool:

@@ -91,6 +91,60 @@ class TestImplIsOwnAndInherited:
         """
         pass
 
+    def test_impl_has_override_property_getter_with_impl(self) -> None:
+        """property getter 有 @impl 时 impl_has_override 返回 True。"""
+        class Svc(mutobj.Declaration):
+            @property
+            def name(self) -> str: ...
+
+        @mutobj.impl(Svc.name.getter)
+        def svc_name(self) -> str:
+            return "impl"
+
+        decl_func = mutobj.get_declaration_func(Svc, "name.getter")
+        assert decl_func is not None
+        assert mutobj.impl_has_override(decl_func) is True
+
+    def test_impl_has_override_property_getter_without_impl(self) -> None:
+        """property getter 无 @impl 时 impl_has_override 返回 False。"""
+        class Svc(mutobj.Declaration):
+            @property
+            def name(self) -> str: ...
+
+        decl_func = mutobj.get_declaration_func(Svc, "name.getter")
+        assert decl_func is not None
+        assert mutobj.impl_has_override(decl_func) is False
+
+    def test_impl_has_override_property_setter_with_impl(self) -> None:
+        """property setter 有 @impl 时 impl_has_override 返回 True。"""
+        class Svc(mutobj.Declaration):
+            @property
+            def name(self) -> str: ...
+
+            @name.setter
+            def name(self, value: str) -> None: ...
+
+        @mutobj.impl(Svc.name.setter)
+        def svc_name(self, value: str) -> None:
+            pass
+
+        decl_func = mutobj.get_declaration_func(Svc, "name.setter")
+        assert decl_func is not None
+        assert mutobj.impl_has_override(decl_func) is True
+
+    def test_impl_has_override_property_setter_without_impl(self) -> None:
+        """property setter 无 @impl 时 impl_has_override 返回 False。"""
+        class Svc(mutobj.Declaration):
+            @property
+            def name(self) -> str: ...
+
+            @name.setter
+            def name(self, value: str) -> None: ...
+
+        decl_func = mutobj.get_declaration_func(Svc, "name.setter")
+        assert decl_func is not None
+        assert mutobj.impl_has_override(decl_func) is False
+
 
 class TestImplChain:
 
