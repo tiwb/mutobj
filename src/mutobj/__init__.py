@@ -44,6 +44,10 @@ from .core._discovery import (
     get_registry_generation,
     resolve_class,
 )
+from .core._typing_utils import (
+    annotation_match,
+    annotation_resolve,
+)
 
 __version__ = "0.9.999"
 __all__ = [
@@ -75,4 +79,6 @@ __all__ = [
     "discover_subclasses",
     "get_registry_generation",
     "resolve_class",
+    "annotation_match",
+    "annotation_resolve",
 ]
