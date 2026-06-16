@@ -21,8 +21,6 @@ pip install mutobj
 
 ## 快速开始
 
-**声明文件 (`user.py`)**
-
 ```python
 import mutobj
 
@@ -30,118 +28,32 @@ class User(mutobj.Declaration):
     name: str
     age: int
 
-    def greet(self) -> str:
-        """返回问候语"""
-        ...
-```
-
-**实现文件 (`user_impl.py`)**
-
-```python
-import mutobj
-from .user import User
+    def greet(self) -> str: ...
 
 @mutobj.impl(User.greet)
-def greet(self: User) -> str:
+def user_greet(self: User) -> str:
     return f"Hello, I'm {self.name}!"
-```
-
-**使用**
-
-```python
-from user import User
-import user_impl  # 导入以注册实现
 
 user = User(name="Alice", age=25)
 print(user.greet())  # "Hello, I'm Alice!"
 ```
 
-## Declaration 构造
-
-简单字段可直接用声明属性参与构造：
-
-```python
-class Request(mutobj.Declaration):
-    method: str = "GET"
-    path: str = "/"
-```
-
-当构造阶段需要派生字段或后处理时，推荐声明 `__post_init__`，并把实现放到 `@mutobj.impl(...)`：
-
-```python
-class JSONResponse(mutobj.Declaration):
-    content: dict[str, object]
-    summary: str = mutobj.field(default="", init=False)
-
-    def __post_init__(self) -> None: ...
-
-@mutobj.impl(JSONResponse.__post_init__)
-def json_response_post_init(self: JSONResponse) -> None:
-    self.summary = f"keys={sorted(self.content)}"
-```
-
-`field(init=False)` 表示该字段不接受构造参数，只使用默认值或在 `__post_init__` 中赋值。
-
-## Extension 机制
-
-为类添加私有状态：
-
-```python
-class UserExt(mutobj.Extension[User]):
-    _login_count: int = 0
-
-    def __extension_init__(self):
-        self._login_count = 0
-
-@mutobj.impl(User.greet)
-def greet(self: User) -> str:
-    ext = UserExt.of(self)
-    ext._login_count += 1
-    return f"Hello, {self.name}! (login #{ext._login_count})"
-```
-
-## 支持的功能
-
-| 功能 | 状态 |
-|------|------|
-| 属性声明 | ✅ |
-| 方法声明与实现 | ✅ |
-| Property | ✅ |
-| classmethod | ✅ |
-| staticmethod | ✅ |
-| 继承 | ✅ |
-| Extension | ✅ |
-| 类型检查 | ✅ |
-
-## 文档
-
-- [使用指南](docs/guide.md)
-- [API 参考](docs/api/reference.md)
+字段声明、方法覆盖、继承、Extension 私有状态、Implementation 类等详见 [使用指南](docs/guide.md)。
 
 ## Lint 工具
 
-mutobj 的 lint 现在作为 pytest 内的运行时检查执行：
+在 pytest 中执行运行时 lint，检查 `@impl` 命名规范、签名一致性等：
 
 ```python
-import pytest
 from mutobj.lint import check
 
-
 def test_lint() -> None:
-    results = check(["mutobj.*"])
+    results = check(["mypkg.*"])
     if results:
         pytest.fail(results.format())
 ```
 
-- `check(["pkg.*"])` 会 import 指定模块并检查运行时已注册的 `@impl`
-- `exclude=["pkg._internal.*"]` 可排除子模块
-- `LintResults.format()` 适合直接作为 pytest 断言消息
-
-如果需要在命令行里临时查看结果，可直接运行：
-
-```bash
-python -c "from mutobj.lint import check; print(check(['mutobj.*']).format())"
-```
+详见 [使用指南 §5.4](docs/guide.md#54-mutobjlintcheck)。
 
 ## 开发
 
