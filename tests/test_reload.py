@@ -305,3 +305,94 @@ class TestInPlaceRedefinition:
         # 端到端：构造实例正常
         obj = cls(x=1, y="ok")
         assert isinstance(obj, cls)
+
+    # ———————————————————————— L2 契约：reload 状态机 / 容错路径 ————————————————————————
+
+    @pytest.mark.l2("reload 后 classmethod 的 __mutobj_class__ 指向更新后的类")
+    def test_classmethod_mutobj_class_updated_on_reload(self):
+        """classmethod stub reload 后 inner func 的 __mutobj_class__ 指向新类"""
+        g1 = _exec_class(
+            "class Svc(mutobj.Declaration):\n"
+            "    @classmethod\n"
+            "    def factory(cls) -> 'Svc': ...\n",
+            module_name="test_cm_reload",
+        )
+        cls = g1["Svc"]
+        inner_func = cls.__dict__["factory"].__func__
+        assert inner_func.__mutobj_class__ is cls
+
+        g2 = _exec_class(
+            "class Svc(mutobj.Declaration):\n"
+            "    @classmethod\n"
+            "    def factory(cls) -> 'Svc': ...\n"
+            "    def extra(self) -> int: ...\n",
+            module_name="test_cm_reload",
+        )
+        cls2 = g2["Svc"]
+        assert cls is cls2
+
+        # L2：__mutobj_class__ 正确更新到 reload 后的类
+        inner_after = cls.__dict__["factory"].__func__
+        assert inner_after.__mutobj_class__ is cls
+        # 端到端：classmethod 调用正常（类上和实例上均可调用）
+        assert cls.factory() is None
+        assert cls().factory() is None
+
+    @pytest.mark.l2("reload 后 staticmethod 的 __mutobj_class__ 指向更新后的类")
+    def test_staticmethod_mutobj_class_updated_on_reload(self):
+        """staticmethod stub reload 后 inner func 的 __mutobj_class__ 指向新类"""
+        g1 = _exec_class(
+            "class Util(mutobj.Declaration):\n"
+            "    @staticmethod\n"
+            "    def helper(x: int) -> int: ...\n",
+            module_name="test_sm_reload",
+        )
+        cls = g1["Util"]
+        inner_func = cls.__dict__["helper"].__func__
+        assert inner_func.__mutobj_class__ is cls
+
+        g2 = _exec_class(
+            "class Util(mutobj.Declaration):\n"
+            "    @staticmethod\n"
+            "    def helper(x: int) -> int: ...\n"
+            "    def extra(self) -> str: ...\n",
+            module_name="test_sm_reload",
+        )
+        cls2 = g2["Util"]
+        assert cls is cls2
+
+        # L2：__mutobj_class__ 正确更新到 reload 后的类
+        inner_after = cls.__dict__["helper"].__func__
+        assert inner_after.__mutobj_class__ is cls
+        # 端到端：staticmethod 调用正常
+        assert cls.helper(1) is None
+
+    @pytest.mark.l2("reload 时 impl chain 合并：新增 stub 方法从 old chain 继承 default")
+    def test_reload_merges_new_stub_with_existing_chain(self):
+        """Reload 新增 stub 方法时，其 default entry 正确接管"""
+        g1 = _exec_class(
+            "class Svc(mutobj.Declaration):\n"
+            "    def old(self) -> str: ...\n"
+        )
+        cls = g1["Svc"]
+
+        # 给 old 注册一个外部 impl
+        @mutobj.impl(cls.old)
+        def old_impl(self) -> str:
+            return "external"
+        assert cls().old() == "external"
+
+        g2 = _exec_class(
+            "class Svc(mutobj.Declaration):\n"
+            "    def old(self) -> str: ...\n"
+            "    def new_stub(self) -> int: ...\n"
+        )
+        cls2 = g2["Svc"]
+        assert cls is cls2
+
+        # L2：old 的外部 impl 在 reload 后仍然有效
+        assert cls().old() == "external"
+        # 端到端：新 stub 有默认实现（返回 None）
+        assert cls().new_stub() is None
+        # L2：new_stub 的 impl chain 不为空
+        assert len(mutobj.impl_chain(cls.new_stub)) > 0

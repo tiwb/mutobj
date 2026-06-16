@@ -1,194 +1,177 @@
-"""
-mutobj.lint 公开 API 实现
-"""
-
 from __future__ import annotations
 
-import ast
-import os
-from dataclasses import dataclass
+import fnmatch
+import importlib
+import pkgutil
+from dataclasses import dataclass, field
+from types import ModuleType
+from typing import Sequence
+
 from pathlib import Path
-from typing import Iterable
 
-from mutobj.lint._resolver import DeclarationResolver
-from mutobj.lint._rules import check_r001, check_r002, check_r003
+from mutobj.core._declaration import Declaration
 
-# 默认排除的目录名（任意层级匹配目录名即跳过）
-_DEFAULT_EXCLUDES: frozenset[str] = frozenset({
-    "__pycache__", ".git", ".venv", "venv", "build", "dist", "node_modules",
-})
+from ._helpers import ClassSourceInfo, class_source_info
+from ._r001 import check_r001
+from ._r002 import check_r002
+from ._r003 import check_r003
+from ._r004 import check_r004
 
 
-@dataclass(frozen=True, order=True)
+@dataclass(frozen=True, slots=True)
+class AsyncAllowed:
+    """Allow async/sync differences for a specific @impl in R004."""
+
+
+@dataclass(frozen=True, slots=True)
+class SignatureOverride:
+    """Suppress R004 for a specific @impl."""
+
+    reason: str = ""
+
+
+def _relpath(path: str) -> str:
+    try:
+        return str(Path(path).relative_to(Path.cwd()))
+    except ValueError:
+        return path
+
+
+@dataclass(frozen=True, order=True, slots=True)
 class LintMessage:
-    """单条 lint 报告"""
-    # 排序优先级：path -> line -> column -> rule_id
     path: str
     line: int
     column: int
     rule_id: str
     message: str
-    severity: str  # "error" | "warning"
+    severity: str
+    symbol: str | None = field(default=None, compare=False)
+
+    def __str__(self) -> str:
+        path = _relpath(self.path)
+        location = f"{path}:{self.line}"
+        if self.symbol:
+            return f"{self.rule_id} {location} [{self.symbol}] {self.message}"
+        return f"{self.rule_id} {location} {self.message}"
+
+    def __repr__(self) -> str:
+        return str(self)
 
 
-def lint_file(path: str | Path) -> list[LintMessage]:
-    """对单个 .py 文件执行 lint。
+@dataclass(frozen=True, slots=True)
+class LintResults:
+    """Container for LintMessage list with readable formatting helpers."""
 
-    无法 parse / 文件不存在 / 不是 .py 文件时返回空列表（保守不报警）。
-    """
-    p = Path(path).resolve()
-    resolver = DeclarationResolver()
-    impl_pairs = _scan_impl_pairs_for_file(p)
-    return _lint_one(p, resolver, impl_pairs=impl_pairs)
+    messages: list[LintMessage] = field(default_factory=list[LintMessage])
+
+    def format(self) -> str:
+        """Return summary line + one LintMessage per line, for pytest.fail()."""
+        errors = sum(1 for m in self.messages if m.severity == "error")
+        warnings = sum(1 for m in self.messages if m.severity == "warning")
+        lines = [f"{errors} errors, {warnings} warnings"]
+        lines.extend(str(m) for m in self.messages)
+        return "\n".join(lines)
+
+    def __repr__(self) -> str:
+        return self.format()
+
+    def __bool__(self) -> bool:
+        return bool(self.messages)
 
 
-def lint_directory(
-    path: str | Path,
+def check(
+    patterns: Sequence[str],
     *,
-    exclude: Iterable[str] | None = None,
-) -> list[LintMessage]:
-    """递归扫描目录下所有 .py 文件。
+    exclude: Sequence[str] | None = None,
+) -> LintResults:
+    """Run mutobj lint checks against already-importable modules.
 
-    Args:
-        path: 目录路径
-        exclude: 追加排除的目录名（在默认基础上累加）
-
-    Returns:
-        所有违规报告，按 (path, line, column) 排序
+    `check()` imports the requested modules directly and then runs runtime rules
+    against the resulting `Declaration` subclasses. It does not sandbox import
+    side effects or clean `sys.modules`; callers should treat import side
+    effects as part of the checked modules' normal pytest runtime.
     """
-    root = Path(path)
-    excludes: set[str] = set(_DEFAULT_EXCLUDES)
-    if exclude:
-        excludes.update(exclude)
+    if not patterns:
+        return LintResults()
 
-    files = list(_iter_py_files(root, excludes))
-    resolver = DeclarationResolver()
-    impl_pairs = _scan_impl_pairs(files)
+    exclude_patterns = tuple(exclude or ())
+    modules = _load_modules(patterns, exclude_patterns)
+    classes = _collect_declaration_classes(modules)
 
-    results: list[LintMessage] = []
-    for f in files:
-        results.extend(_lint_one(f, resolver, impl_pairs=impl_pairs))
-    results.sort()
-    return results
+    infos = [info for cls in classes if (info := class_source_info(cls)) is not None]
+    file_groups: dict[Path, list[ClassSourceInfo]] = {}
+    for info in infos:
+        file_groups.setdefault(info.file_path, []).append(info)
 
-
-def _lint_one(
-    path: Path,
-    resolver: DeclarationResolver,
-    impl_pairs: dict[Path, tuple[str, str]] | None = None,
-) -> list[LintMessage]:
-    """对单文件执行所有规则。失败时静默返回空。"""
-    if not path.is_file() or path.suffix != ".py":
-        return []
-    try:
-        source = path.read_text(encoding="utf-8")
-    except OSError:
-        return []
-    try:
-        tree = ast.parse(source, filename=str(path))
-    except SyntaxError:
-        return []
-
-    file_info = resolver.analyze_file(path, tree=tree)
-    messages = check_r001(path, tree, file_info, resolver, impl_pairs=impl_pairs)
-    messages.extend(check_r002(path, tree, impl_pairs, source_lines=source.splitlines()))
-    messages.extend(check_r003(path, tree, source_lines=source.splitlines()))
-    return messages
+    messages: list[LintMessage] = []
+    messages.extend(check_r001(infos, file_groups))
+    messages.extend(check_r002(infos, classes))
+    messages.extend(check_r003(infos))
+    messages.extend(check_r004(infos))
+    messages.sort()
+    return LintResults(messages=messages)
 
 
-def _iter_py_files(root: Path, excludes: set[str]) -> Iterable[Path]:
-    """递归收集 .py 文件，跳过排除目录。
-
-    单文件路径直接返回该文件。
-    """
-    if root.is_file():
-        if root.suffix == ".py":
-            yield root
-        return
-    for dirpath, dirnames, filenames in os.walk(root):
-        # 原地修改 dirnames 以剪枝（os.walk 约定）
-        dirnames[:] = [d for d in dirnames if d not in excludes]
-        for fn in filenames:
-            if fn.endswith(".py"):
-                yield Path(dirpath) / fn
-
-
-# ============================================================ 预扫描 impl 配对
+def _load_modules(
+    patterns: Sequence[str],
+    exclude_patterns: tuple[str, ...],
+) -> list[ModuleType]:
+    modules: list[ModuleType] = []
+    seen: set[str] = set()
+    for pattern in patterns:
+        for module_name in _expand_pattern(pattern):
+            if module_name in seen:
+                continue
+            if _is_excluded(module_name, exclude_patterns):
+                continue
+            modules.append(importlib.import_module(module_name))
+            seen.add(module_name)
+    return modules
 
 
-def _scan_impl_pairs(files: list[Path]) -> dict[Path, tuple[str, str]]:
-    """扫描文件列表，找出 decl-impl 配对。
+def _expand_pattern(pattern: str) -> list[str]:
+    if not pattern.endswith(".*"):
+        return [pattern]
 
-    对每个包目录（含 __init__.py），找到 ``_{stem}_impl.py`` 与 ``{stem}.py``
-    的配对关系，返回 ``{decl_path: (impl_full_module_name, decl_package)}``。
-    """
-    # 按目录分组
-    by_dir: dict[Path, list[str]] = {}
-    for f in files:
-        by_dir.setdefault(f.parent, []).append(f.name)
+    package_name = pattern[:-2]
+    package = importlib.import_module(package_name)
+    module_names = [package_name]
+    package_paths = getattr(package, "__path__", None)
+    if package_paths is None:
+        return module_names
 
-    pairs: dict[Path, tuple[str, str]] = {}
-
-    for dirpath, filenames in by_dir.items():
-        if "__init__.py" not in filenames:
-            continue
-        # 计算目录的包名
-        try:
-            pkg_name = _resolve_package_name(dirpath)
-        except ValueError:
-            continue
-        if pkg_name is None:
-            continue
-
-        for fn in filenames:
-            if fn.startswith("_") and fn.endswith("_impl.py"):
-                stem = fn[1:-8]  # _xxx_impl.py → xxx
-                if not stem:
-                    continue
-                impl_module = fn[:-3]  # _xxx_impl
-                decl_fn = f"{stem}.py"
-                if decl_fn in filenames:
-                    decl_path = (dirpath / decl_fn).resolve()
-                    pairs[decl_path] = (f"{pkg_name}.{impl_module}", pkg_name)
-
-    return pairs
+    prefix = f"{package_name}."
+    for module_info in pkgutil.walk_packages(package_paths, prefix):
+        module_names.append(module_info.name)
+    return module_names
 
 
-def _scan_impl_pairs_for_file(file_path: Path) -> dict[Path, tuple[str, str]] | None:
-    """为单个文件扫描配对（用于 lint_file）。"""
-    dirpath = file_path.parent
-    if not (dirpath / "__init__.py").is_file():
-        return None
-
-    stem = file_path.stem
-    try:
-        pkg_name = _resolve_package_name(dirpath)
-    except ValueError:
-        return None
-    if pkg_name is None:
-        return None
-
-    impl_fn = f"_{stem}_impl.py"
-    if (dirpath / impl_fn).is_file():
-        return {file_path: (f"{pkg_name}._{stem}_impl", pkg_name)}
-
-    return None
+def _is_excluded(module_name: str, exclude_patterns: tuple[str, ...]) -> bool:
+    return any(fnmatch.fnmatchcase(module_name, pattern) for pattern in exclude_patterns)
 
 
-def _resolve_package_name(dirpath: Path) -> str | None:
-    """从目录路径反推包点分名。
+def _collect_declaration_classes(modules: Sequence[ModuleType]) -> list[type[Declaration]]:
+    classes: list[type[Declaration]] = []
+    seen: set[type[Declaration]] = set()
+    for module in modules:
+        for value in vars(module).values():
+            if not isinstance(value, type):
+                continue
+            if value is Declaration or not issubclass(value, Declaration):
+                continue
+            if value.__module__ != module.__name__:
+                continue
+            if value in seen:
+                continue
+            classes.append(value)
+            seen.add(value)
+    return classes
 
-    沿着 __init__.py 链向上回溯，拼接包名。
-    """
-    parts: list[str] = []
-    d = dirpath.resolve()
-    while d != d.parent and (d / "__init__.py").is_file():
-        parts.append(d.name)
-        d = d.parent
-    if not parts:
-        return None
-    parts.reverse()
-    return ".".join(parts)
 
-
-__all__ = ["LintMessage", "lint_file", "lint_directory"]
+__all__ = [
+    "AsyncAllowed",
+    "SignatureOverride",
+    "LintMessage",
+    "LintResults",
+    "check",
+]

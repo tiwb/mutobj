@@ -120,29 +120,28 @@ def greet(self: User) -> str:
 
 ## Lint 工具
 
-mutobj 内置静态检查工具 `mutobj-lint`，检测 mutobj 代码风格与命名规范约定。
-
-安装 mutobj 后，`mutobj-lint` 会被自动装到 PATH：
-
-```bash
-mutobj-lint src/                 # 扫描目录
-mutobj-lint --json src/          # JSON 输出（兼容 Code Climate spec，CI 可用）
-mutobj-lint --exclude tests src/ # 追加排除目录
-mutobj-lint src/foo.py           # 扫描单个文件
-```
-
-退出码：发现 error 返回 1，全清返回 0。
-
-除了 CLI，也提供函数 API：
+mutobj 的 lint 现在作为 pytest 内的运行时检查执行：
 
 ```python
-from mutobj.lint import lint_file, lint_directory
+import pytest
+from mutobj.lint import check
 
-for m in lint_directory("src/"):
-    print(f"{m.path}:{m.line}:{m.column} {m.rule_id} {m.message}")
+
+def test_lint() -> None:
+    results = check(["mutobj.*"])
+    if results:
+        pytest.fail(results.format())
 ```
 
-全部纯 `ast` 实现，不 import 任何被检测模块，可安全在 CI / pre-commit 中运行。
+- `check(["pkg.*"])` 会 import 指定模块并检查运行时已注册的 `@impl`
+- `exclude=["pkg._internal.*"]` 可排除子模块
+- `LintResults.format()` 适合直接作为 pytest 断言消息
+
+如果需要在命令行里临时查看结果，可直接运行：
+
+```bash
+python -c "from mutobj.lint import check; print(check(['mutobj.*']).format())"
+```
 
 ## 开发
 

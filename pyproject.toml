@@ -27,9 +27,6 @@ classifiers = [
     "Typing :: Typed",
 ]
 
-[project.scripts]
-mutobj-lint = "mutobj.lint.__main__:main"
-
 [project.urls]
 Homepage = "https://github.com/tiwb/mutobj"
 Documentation = "https://github.com/tiwb/mutobj#readme"
@@ -77,6 +74,3 @@ include = ["src"]
 extraPaths = ["src"]
 typeCheckingMode = "strict"
 reportFunctionMemberAccess = false
-
-[tool.mutobj-lint]
-include = ["src"]

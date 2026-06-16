@@ -54,7 +54,7 @@ class Config(mutobj.Declaration):
 - 可变类型（`list/dict/set/bytearray`）**禁止直接赋值**作为默认值，必须 `field(default_factory=...)`，否则抛 `TypeError`
 - 字段顺序按 MRO，基类在前
 - `init=False` 的字段不进 `__init__` 参数列表，但必须在 `__post_init__` 前赋值，否则构造完成后抛 `TypeError`
-- 子类可用同名注解覆盖父类默认值（类型须与父类一致，注解可省略则沿用父类类型）。类型一致性由 pyright / mutobj-lint 静态保证，mutobj 不作运行时校验
+- 子类可用同名注解覆盖父类默认值（类型须与父类一致，注解可省略则沿用父类类型）。类型一致性由 pyright / `mutobj.lint.check()` 保证，mutobj 不作运行时校验
 - 必填字段（无默认值）在构造完成后仍未赋值会抛 `TypeError`
 
 **ClassVar — 类级共享属性**：
@@ -165,7 +165,7 @@ def user_greet(self: User) -> str:
 
 ### 2.2 命名约定
 
-`@impl` 函数名不影响运行时（按目标方法句柄匹配，不依赖名字），但约定如下，以保持代码可读性，并可被 `mutobj-lint` 自动检查：
+`@impl` 函数名不影响运行时（按目标方法句柄匹配，不依赖名字），但约定如下，以保持代码可读性，并可被 `mutobj.lint.check()` 自动检查：
 
 ```python
 # 函数名 = snake_case(类型名) + "_" + 方法名
@@ -444,15 +444,22 @@ for name, info in mutobj.fields(User).items():
 - `mutobj.get_declaration_func(cls, method_name)` —— 取声明里写的原始函数对象（沿 MRO 查找）
 - `mutobj.get_declaration_doc(cls, method_name)` —— 同步取声明的 docstring
 
-### 5.4 mutobj-lint
+### 5.4 mutobj.lint.check()
 
-静态检查 `@impl` 风格：
+在 pytest 中做运行时 lint：
 
-- **R001**：识别 `...` / `pass` / `yield ...` 桩方法
-- **R002**：检查末尾 `from . import _xxx_impl as _xxx_impl` 写法 + `noqa: F401`
-- **R003**：`@impl` 函数命名规范（禁止 `_` 前缀 + 强制类型名前缀）
+- **R001**：Declaration 子类不能混用声明桩和真实实现
+- **R002**：声明桩必须有 `@impl` 注册，声明文件末尾 `_impl` import 写法保持规范
+- **R003**：`@impl` 函数名应以 `snake_case(类型名)_成员名` 开头，且不要带 `_` 前缀
+- **R004**：`@impl` 签名需要与声明一致（支持 `AsyncAllowed` / `SignatureOverride` 局部豁免）
 
-```bash
-mutobj-lint                # 默认读 pyproject.toml 配置或 cwd
-mutobj-lint src/ tests/    # 显式指定路径
+```python
+import pytest
+from mutobj.lint import check
+
+
+def test_lint() -> None:
+    results = check(["mutobj.*"])
+    if results:
+        pytest.fail(results.format())
 ```

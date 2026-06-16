@@ -1,9 +1,14 @@
-"""mutobj.lint 测试 — 共享 helpers"""
+"""mutobj.lint 测试 helpers"""
 
 from __future__ import annotations
 
+import importlib
+import sys
 import textwrap
+from contextlib import contextmanager
 from pathlib import Path
+from types import ModuleType
+from typing import Iterator
 
 
 def write(tmp: Path, rel: str, code: str) -> Path:
@@ -20,3 +25,17 @@ def make_pkg(tmp: Path, name: str = "pkg") -> Path:
     pkg.mkdir(parents=True, exist_ok=True)
     (pkg / "__init__.py").write_text("", encoding="utf-8")
     return pkg
+
+
+@contextmanager
+def import_temp_pkg(pkg_root: Path, pkg_name: str = "pkg") -> Iterator[ModuleType]:
+    """Temporarily import a package tree and clean its sys.modules entries on exit."""
+    sys.path.insert(0, str(pkg_root))
+    try:
+        module = importlib.import_module(pkg_name)
+        yield module
+    finally:
+        sys.path.remove(str(pkg_root))
+        for name in list(sys.modules):
+            if name == pkg_name or name.startswith(f"{pkg_name}."):
+                del sys.modules[name]
