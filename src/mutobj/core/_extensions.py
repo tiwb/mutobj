@@ -6,13 +6,11 @@ from ._classmeta import ExtensionClassMeta, decl_meta_cache, ext_meta_cache, mut
 from ._constants import MUTOBJ_INFRA_ATTRS
 from ._declaration import Declaration
 from ._fields import (
-    AttributeDescriptor,
     get_ordered_descriptors,
+    handle_field_setattr,
     process_field_annotations,
     validate_class_namespace,
-    validate_class_setattr,
     validate_construction_fields,
-    validate_field_descriptor,
 )
 from ._discovery import bump_registry_generation
 from ._typing_utils import is_classvar
@@ -114,14 +112,13 @@ class ExtensionMeta(type):
 
         return cls
 
-    def __setattr__(cls, name: str, value: Any) -> None:
-        if isinstance(value, AttributeDescriptor):
-            validate_field_descriptor(cls.__name__, value)
-            type.__setattr__(cls, name, value)
-            return
-
-        validate_class_setattr(cls, name, value)
-        type.__setattr__(cls, name, value)
+    # __setattr__ 对 pyright 隐藏（TYPE_CHECKING=True 时不可见），
+    # 避免元类自定义 __setattr__ 导致 pyright 放弃 reportAttributeAccessIssue
+    # 检查。运行时（TYPE_CHECKING=False）方法仍然存在，handle_field_setattr()
+    # 内的字段校验/转换逻辑照常执行。
+    if not TYPE_CHECKING:
+        def __setattr__(cls, name: str, value: Any) -> None:
+            handle_field_setattr(cls, name, value, "Extension")
 
 
 class Extension(Generic[T], metaclass=ExtensionMeta):

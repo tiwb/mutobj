@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Any, Callable, Self, TypeVar, cast
+from typing import TYPE_CHECKING, Any, Callable, Self, TypeVar, cast
 
 from ._classmeta import DeclarationClassMeta, ImplChainEntry, decl_meta_cache, mutobj_meta_cache
 from ._constants import (
@@ -13,8 +13,8 @@ from ._fields import (
     AttributeDescriptor,
     FieldSpec,
     get_ordered_descriptors,
+    handle_field_setattr,
     process_field_annotations,
-    validate_class_setattr,
     validate_construction_fields,
     validate_field_descriptor,
 )
@@ -341,65 +341,13 @@ class DeclarationMeta(type):
                 )
         return obj
 
-    def __setattr__(cls, name: str, value: Any) -> None:
-        if isinstance(value, AttributeDescriptor):
-            validate_field_descriptor(cls.__name__, value)
-            super().__setattr__(name, value)
-            return
-
-        desc: AttributeDescriptor | None = None
-        from_base = False
-        own = cls.__dict__.get(name)
-        if isinstance(own, AttributeDescriptor):
-            desc = own
-        else:
-            for base in cls.__mro__[1:]:
-                base_val = base.__dict__.get(name)
-                if isinstance(base_val, AttributeDescriptor):
-                    desc = base_val
-                    from_base = True
-                    break
-
-        if desc is None:
-            validate_class_setattr(cls, name, value)
-            super().__setattr__(name, value)
-            return
-
-        if isinstance(value, MUTABLE_TYPES):
-            type_name = type(cast(object, value)).__name__
-            raise TypeError(
-                f"Declaration '{cls.__name__}' attribute '{name}' uses mutable default "
-                f"value {type_name}. "
-                f"Use field(default_factory={type_name}) instead."
-            )
-        if isinstance(value, FieldSpec):
-            new_desc = AttributeDescriptor(
-                name,
-                desc.annotation,
-                default=value.default,
-                default_factory=value.default_factory,
-                init=value.init,
-                owner_cls=cls,
-                readonly=desc.readonly,
-                has_storage=desc.has_storage,
-            )
-        else:
-            new_desc = AttributeDescriptor(
-                name,
-                desc.annotation,
-                default=value,
-                owner_cls=cls,
-                readonly=desc.readonly,
-                has_storage=desc.has_storage,
-            )
-        validate_field_descriptor(cls.__name__, new_desc)
-        super().__setattr__(name, new_desc)
-
-        mc = decl_meta_cache.get(cls)
-        if mc is not None:
-            if from_base and name not in mc.fields:
-                mc.fields[name] = new_desc
-            mc.ordered_descriptors = None
+    # __setattr__ 对 pyright 隐藏（TYPE_CHECKING=True 时不可见），
+    # 避免元类自定义 __setattr__ 导致 pyright 放弃 reportAttributeAccessIssue
+    # 检查。运行时（TYPE_CHECKING=False）方法仍然存在，handle_field_setattr()
+    # 内的字段校验/转换逻辑照常执行。
+    if not TYPE_CHECKING:
+        def __setattr__(cls, name: str, value: Any) -> None:
+            handle_field_setattr(cls, name, value, "Declaration")
 
 
 class Declaration(metaclass=DeclarationMeta):

@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import weakref
-from typing import Any, Generic, TypeVar, cast
+from typing import TYPE_CHECKING, Any, Generic, TypeVar, cast
 
 from ._classmeta import ImplementationClassMeta, decl_meta_cache, impl_meta_cache, mutobj_meta_cache
 from ._constants import (
@@ -15,10 +15,9 @@ from ._discovery import (
 from ._fields import (
     AttributeDescriptor,
     get_ordered_descriptors,
+    handle_field_setattr,
     process_field_annotations,
     validate_class_namespace,
-    validate_class_setattr,
-    validate_field_descriptor,
 )
 from ._impls import apply_impl, register_to_chain
 from ._typing_utils import is_classvar
@@ -359,14 +358,13 @@ class ImplementationMeta(type):
 
         return cls
 
-    def __setattr__(cls, name: str, value: Any) -> None:
-        if isinstance(value, AttributeDescriptor):
-            validate_field_descriptor(cls.__name__, value)
-            type.__setattr__(cls, name, value)
-            return
-
-        validate_class_setattr(cls, name, value)
-        type.__setattr__(cls, name, value)
+    # __setattr__ 对 pyright 隐藏（TYPE_CHECKING=True 时不可见），
+    # 避免元类自定义 __setattr__ 导致 pyright 放弃 reportAttributeAccessIssue
+    # 检查。运行时（TYPE_CHECKING=False）方法仍然存在，handle_field_setattr()
+    # 内的字段校验/转换逻辑照常执行。
+    if not TYPE_CHECKING:
+        def __setattr__(cls, name: str, value: Any) -> None:
+            handle_field_setattr(cls, name, value, "Implementation")
 
 
 class Implementation(Generic[T], metaclass=ImplementationMeta):

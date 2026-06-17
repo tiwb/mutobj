@@ -485,6 +485,92 @@ def validate_class_setattr(
     )
 
 
+def handle_field_setattr(
+    cls: type,
+    name: str,
+    value: Any,
+    type_label: str,
+) -> None:
+    """Handle class-level attribute assignment for all mutobj metaclasses.
+
+    Three branches, in order:
+    1. *value* is an ``AttributeDescriptor`` → validate and set.
+    2. *name* already has an ``AttributeDescriptor`` in *cls* or its MRO →
+       validate, convert ``FieldSpec`` / plain value, set the new descriptor,
+       update the per-class meta cache.
+    3. No existing descriptor → ``validate_class_setattr`` + set.
+
+    This single function replaces the per-metaclass ``__setattr__`` body;
+    all three metaclasses delegate to it identically.
+    """
+    # ── branch 1: AttributeDescriptor passthrough ──
+    if isinstance(value, AttributeDescriptor):
+        validate_field_descriptor(cls.__name__, value)
+        type.__setattr__(cls, name, value)
+        return
+
+    # ── branch 2: existing descriptor lookup ──
+    desc: AttributeDescriptor | None = None
+    from_base = False
+    own = cls.__dict__.get(name)
+    if isinstance(own, AttributeDescriptor):
+        desc = own
+    else:
+        for base in cls.__mro__[1:]:
+            base_val = base.__dict__.get(name)
+            if isinstance(base_val, AttributeDescriptor):
+                desc = base_val
+                from_base = True
+                break
+
+    if desc is not None:
+        # ── mutable-default guard ──
+        if isinstance(value, MUTABLE_TYPES):
+            type_name = type(cast(object, value)).__name__
+            raise TypeError(
+                f"{type_label} '{cls.__name__}' attribute '{name}' uses mutable "
+                f"default value {type_name}. "
+                f"Use field(default_factory={type_name}) instead."
+            )
+
+        # ── build replacement descriptor ──
+        if isinstance(value, FieldSpec):
+            new_desc = AttributeDescriptor(
+                name,
+                desc.annotation,
+                default=value.default,
+                default_factory=value.default_factory,
+                init=value.init,
+                owner_cls=cls,
+                readonly=desc.readonly,
+                has_storage=desc.has_storage,
+            )
+        else:
+            new_desc = AttributeDescriptor(
+                name,
+                desc.annotation,
+                default=value,
+                owner_cls=cls,
+                readonly=desc.readonly,
+                has_storage=desc.has_storage,
+            )
+
+        validate_field_descriptor(cls.__name__, new_desc)
+        type.__setattr__(cls, name, new_desc)
+
+        # ── cache update (shared by all three metaclass types) ──
+        mc = mutobj_meta_cache.get(cls)
+        if mc is not None:
+            if from_base and name not in mc.fields:
+                mc.fields[name] = new_desc
+            mc.ordered_descriptors = None
+        return
+
+    # ── branch 3: not a field ──
+    validate_class_setattr(cls, name, value)
+    type.__setattr__(cls, name, value)
+
+
 def validate_class_namespace(
     cls: type,
     *,
